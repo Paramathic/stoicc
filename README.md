@@ -1,36 +1,51 @@
-<div align="center">
-  <img src="https://cdn.openai.com/triton/assets/triton-logo.png" alt="Triton logo" width="88" height="100">
-</div>
+# Sparsity in Triton
+This repository contains changes to allow 2:4 and heterogeneous sparsity in Triton.
 
-We're hiring! If you are interested in working on Triton at OpenAI, we have roles open for [Compiler Engineers](https://openai.com/careers/software-engineer-triton-compiler) and [Kernel Engineers](https://openai.com/careers/kernel-engineer).
+## 2:4 Sparsity
+The goal is to let Triton users leverage 2:4 sparsity with minimal modifications to their dense code. Most kernels written for dense tensors in Triton can be reused with sparse tensors. To enable sparsity, users simply pass inputs wrapped in a `CompressedSparse` object from `triton.sparsity`, which Triton recognizes as sparse.
 
-| **`Documentation`** | **`Nightly Wheels`** |
-|-------------------- | -------------------- |
-| [![Documentation](https://github.com/triton-lang/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/) | [![Wheels](https://github.com/triton-lang/triton/actions/workflows/wheels.yml/badge.svg?branch=release/2.0.x)](https://github.com/triton-lang/triton/actions/workflows/wheels.yml) |
+The creation of a sparse object is decoupled from the pruning and compression code to allow the users to write their own. Example pruning (magnitude) and compression code is available under `python/tutorials/sparse` for users who want to use these features out of the box.
 
+```python
+@triton.jit
+def matmul_kernel(D, A, B, ...):
+  # Normal dense Triton kernel is implemented here
+  # There is nothing extra in the code that
+  # implies sparsity
 
-# Triton
+# Wrap the Compressed Data and Metadata tensors in a Triton 2:4 tensor type
+# There is an example of pruning and compression code implemented in the tutorials directory
+A_compressed = CompressedSparse.NV24(A_data, A_metadata)
 
-This is the development repository of Triton, a language and compiler for writing highly efficient custom Deep-Learning primitives. The aim of Triton is to provide an open-source environment to write fast code at higher productivity than CUDA, but also with higher flexibility than other existing DSLs.
-
-The foundations of this project are described in the following MAPL2019 publication: [Triton: An Intermediate Language and Compiler for Tiled Neural Network Computations](http://www.eecs.harvard.edu/~htk/publication/2019-mapl-tillet-kung-cox.pdf). Please consider citing this work if you use Triton!
-
-The [official documentation](https://triton-lang.org) contains installation instructions and tutorials.  See also these third-party [Triton puzzles](https://github.com/srush/Triton-Puzzles), which can all be run using the Triton interpreter -- no GPU required.
-
-# Quick Installation
-
-You can install the latest stable release of Triton from pip:
-
-```bash
-pip install triton
+# Launch the kernel with A_compressed
+matmul_kernel[grid](D, A_compressed, B, ...)
 ```
-Binary wheels are available for CPython 3.8-3.12 and PyPy 3.8-3.9.
 
-And the latest nightly release:
+All operations using the sparse tensor are lowered down using their sparse interpretation. Example 2:4 code can be found in `python/tutorials/sparse/matrix_multiplication_A_sparse.py`.
 
-```bash
-pip install -U --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/Triton-Nightly/pypi/simple/ triton-nightly
-```
+Performance results below use matrix sizes found in the OPT-175B model with a custom cuSPARSELt 0.6.2.3 integration running on NVIDIA A100 cards. The time measured is only for the matrix multiplication, sparse matrix setup (including pruning and compression) is excluded.
+
+<img src="docs/sparse/opt175B_bs16.svg" alt="batch size 16 2:4 results">
+<img src="docs/sparse/opt175B_bs32.svg" alt="batch size 32 2:4 results">
+
+
+## Tile-level Sparsity
+The sparse code generation backend allows us to write a kernel that performs a matmul where A is composed of both 2:4 sparse and dense tiles and B is fully dense. An inspection phase splits the A matrix into tiles, assigns a sparsity format to each and stores them in a tile-level csr-like format. The execution phase (triton kernel) performs the matmul. An example implementation of this kernel is provided in `python/tutorials/sparse/tiled.py`.
+
+We benchmark on an NVIDIA A100 (80GB) GPU with a mixture of dense tiles and [2:4](https://developer.nvidia.com/blog/structured-sparsity-in-the-nvidia-ampere-architecture-and-applications-in-search-engines/) sparse tiles, where the 2:4 tiles are selected randomly. For example, "50% 2:4 Tiles" corresponds to a scenario where half of the tiles are pruned to 2:4 sparsity while the other half remain dense, resulting in an overall sparsity level of 25% for the whole matrix. The matrix sizes are chosen based on those used in the OPT family of models.
+
+<img src="docs/sparse/heterogeneous_bs16.svg" alt="batch size 16 heterogeneous results">
+<img src="docs/sparse/heterogeneous_bs32.svg" alt="batch size 32 heterogeneous results">
+
+## Constraints
+Currently, our sparsity implementation has two constraints.
+
+1. The metadata must be provided in a specific format to enable 2:4 sparsity optimizations. We provide an example code on how to perform the reordering in `python/tutorials/sparse/compress.py`. The reordering closely resembles [the one used in CUTLASS](https://github.com/NVIDIA/cutlass/blob/main/tools/util/include/cutlass/util/host_reorder.h).
+2. `tl.make_block_ptr` and `tl.advance` must be used for pointer manipulation on sparse tensors
+3. Only Ampere cards are currently supported with FP16 data types
+
+## Next Steps
+Current code modifies the `3.1.x` Triton release, we are working on merging our changes with the Triton main branch and adding Hopper support.
 
 # Install from source
 
@@ -200,25 +215,5 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 - `MLIR_ENABLE_TIMING` dumps the timing information for each MLIR pass.
 - `LLVM_ENABLE_TIMING` dumps the timing information for each LLVM pass.
 
-# Changelog
-
-Version 2.0 is out! New features include:
-- Many, many bug fixes
-- Performance improvements
-- Backend rewritten to use MLIR
-- Support for kernels that contain back-to-back matmuls (e.g., flash attention)
-
-# Contributing
-
-Community contributions are more than welcome, whether it be to fix bugs or to add new features at [github](https://github.com/triton-lang/triton/). For more detailed instructions, please visit our [contributor's guide](CONTRIBUTING.md).
 
 
-# Compatibility
-
-Supported Platforms:
-  * Linux
-
-Supported Hardware:
-  * NVIDIA GPUs (Compute Capability 7.0+)
-  * AMD GPUs (ROCm 5.2+)
-  * Under development: CPUs
