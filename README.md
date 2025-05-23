@@ -38,7 +38,7 @@ We benchmark on an NVIDIA A100 (80GB) GPU with a mixture of dense tiles and [2:4
 <img src="docs/sparse/heterogeneous_bs32.svg" alt="batch size 32 heterogeneous results">
 
 ## Constraints
-Currently, our sparsity implementation has two constraints.
+Currently, our sparsity implementation has three constraints.
 
 1. The metadata must be provided in a specific format to enable 2:4 sparsity optimizations. We provide an example code on how to perform the reordering in `python/tutorials/sparse/compress.py`. The reordering closely resembles [the one used in CUTLASS](https://github.com/NVIDIA/cutlass/blob/main/tools/util/include/cutlass/util/host_reorder.h).
 2. `tl.make_block_ptr` and `tl.advance` must be used for pointer manipulation on sparse tensors
@@ -214,6 +214,8 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 - `TRITON_ALWAYS_COMPILE=1` forces to compile kernels regardless of cache hit.
 - `MLIR_ENABLE_TIMING` dumps the timing information for each MLIR pass.
 - `LLVM_ENABLE_TIMING` dumps the timing information for each LLVM pass.
+
+
 
 
 
