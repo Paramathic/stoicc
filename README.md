@@ -30,7 +30,7 @@ Performance results below use matrix sizes found in the OPT-175B model with a cu
 
 
 ## Tile-level Sparsity
-The sparse code generation backend allows us to write a kernel that performs a matmul where A is composed of both 2:4 sparse and dense tiles and B is fully dense. An inspection phase splits the A matrix into tiles, assigns a sparsity format to each and stores them in a tile-level csr-like format. The execution phase (triton kernel) performs the matmul. An example implementation of this kernel is provided in `python/tutorials/sparse/tiled.py`.
+The sparse code generation backend allows us to write a kernel that performs a matmul where A is composed of both 2:4 sparse and dense tiles and B is fully dense. An inspection phase splits the A matrix into tiles, assigns a sparsity format to each and stores them in a tile-level csr-like format. The execution phase (triton kernel) performs the matmul. An example implementation of a simple inspector is provided [here](python/tutorials/sparse/mixed_tile_inspector.py), along with the corresponding [executor and benchmarking code](python/tutorials/sparse/mixed_tile_executor.py).
 
 We benchmark on an NVIDIA A100 (80GB) GPU with a mixture of dense tiles and [2:4](https://developer.nvidia.com/blog/structured-sparsity-in-the-nvidia-ampere-architecture-and-applications-in-search-engines/) sparse tiles, where the 2:4 tiles are selected randomly. For example, "50% 2:4 Tiles" corresponds to a scenario where half of the tiles are pruned to 2:4 sparsity while the other half remain dense, resulting in an overall sparsity level of 25% for the whole matrix. The matrix sizes are chosen based on those used in the OPT family of models.
 

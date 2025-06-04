@@ -41,6 +41,8 @@ def parse_args(parser):
 def is_cuda():
     return triton.runtime.driver.active.get_current_target().backend == "cuda"
 
+def init_to_zero(name):
+    return lambda nargs: nargs[name].zero_()
 
 def get_cuda_autotune_config():
     return [
@@ -97,6 +99,63 @@ def get_cuda_autotune_config():
         triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 8},
                       num_stages=3, num_warps=4),
     ]
+
+def get_split_k_autotune_config():
+    return [
+        # 16 warps
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 8, 'SPLIT_K': 4},
+                      num_stages=3, num_warps=16, pre_hook=init_to_zero('c_ptr')),
+        # 8 warps
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 8, 'SPLIT_K': 4},
+                      num_stages=3, num_warps=8, pre_hook=init_to_zero('c_ptr')),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'SPLIT_K': 4},
+                      num_stages=3, num_warps=8, pre_hook=init_to_zero('c_ptr')),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'SPLIT_K': 4},
+                      num_stages=3, num_warps=8, pre_hook=init_to_zero('c_ptr')),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'SPLIT_K': 4},
+                      num_stages=3, num_warps=8, pre_hook=init_to_zero('c_ptr')),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 8, 'SPLIT_K': 4},
+                      num_stages=3, num_warps=8, pre_hook=init_to_zero('c_ptr')),
+        # 4 warps
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 8, 'SPLIT_K': 4},
+                      num_stages=3, num_warps=4, pre_hook=init_to_zero('c_ptr')),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'SPLIT_K': 4},
+                      num_stages=3, num_warps=4, pre_hook=init_to_zero('c_ptr')),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'SPLIT_K': 4},
+                      num_stages=3, num_warps=4, pre_hook=init_to_zero('c_ptr')),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'SPLIT_K': 4},
+                      num_stages=3, num_warps=4, pre_hook=init_to_zero('c_ptr')),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 8, 'SPLIT_K': 4},
+                      num_stages=3, num_warps=4, pre_hook=init_to_zero('c_ptr')),
+
+        # Small N
+        # 16 warps
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 8, 'SPLIT_K': 4},
+                      num_stages=3, num_warps=16, pre_hook=init_to_zero('c_ptr')),
+        # 8 warps
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 8, 'SPLIT_K': 4},
+                      num_stages=3, num_warps=8, pre_hook=init_to_zero('c_ptr')),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'SPLIT_K': 4},
+                      num_stages=3, num_warps=8, pre_hook=init_to_zero('c_ptr')),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'SPLIT_K': 4},
+                      num_stages=3, num_warps=8, pre_hook=init_to_zero('c_ptr')),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'SPLIT_K': 4},
+                      num_stages=3, num_warps=8, pre_hook=init_to_zero('c_ptr')),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 8, 'SPLIT_K': 4},
+                      num_stages=3, num_warps=8, pre_hook=init_to_zero('c_ptr')),
+        # 4 warps
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 8, 'SPLIT_K': 4},
+                      num_stages=3, num_warps=4, pre_hook=init_to_zero('c_ptr')),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'SPLIT_K': 4},
+                      num_stages=3, num_warps=4, pre_hook=init_to_zero('c_ptr')),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'SPLIT_K': 4},
+                      num_stages=3, num_warps=4, pre_hook=init_to_zero('c_ptr')),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8, 'SPLIT_K': 4},
+                      num_stages=3, num_warps=4, pre_hook=init_to_zero('c_ptr')),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 8, 'SPLIT_K': 4},
+                      num_stages=3, num_warps=4, pre_hook=init_to_zero('c_ptr')),
+    ]
+
 def get_init_result_sizes():
     return [ # Initial results OPT model sizes
         (21504, 7168), (7168, 7168), (28672, 7168), (7168, 28672),
@@ -205,6 +264,99 @@ def matmul(a, b, activation=""):
     )
     return c
 
+@triton.autotune(
+    configs=get_split_k_autotune_config(),
+    key=['M', 'N', 'K']
+)
+@triton.jit
+def matmul_kernel_sparse_split_k(
+        a_ptr, b_ptr, c_ptr,
+        M, N, K,
+        stride_am, stride_ak,
+        stride_bk, stride_bn,
+        stride_cm, stride_cn,
+        BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
+        SPLIT_K: tl.constexpr, GROUP_SIZE_M: tl.constexpr
+):
+    pid = tl.program_id(axis=0)
+    pid_k = tl.program_id(axis=1)
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + (pid % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
+
+    # The K dimension is split between SPLIT_K CTAs and each CTA
+    # does the computation for K/(BLOCK_SIZE_K*SPLIT_K) tiles.
+    # The tiles that each CTA works on are strided throughout the matrix
+    # i.e. the work along K is split like this:
+    #
+    # -------------------------------------
+    # | CTA 0 | CTA 1 | CTA 0 | CTA 1 | ...
+    # -------------------------------------
+    #
+    a_ptrs = tl.make_block_ptr(a_ptr,
+                               shape=(M, K),
+                               strides=(stride_am, stride_ak),
+                               offsets=(pid_m*BLOCK_SIZE_M, pid_k*BLOCK_SIZE_K),
+                               block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K),
+                               order=(1,0))
+    b_ptrs = tl.make_block_ptr(b_ptr,
+                               shape=(K, N),
+                               strides=(stride_bk, stride_bn),
+                               offsets=(pid_k*BLOCK_SIZE_K, pid_n*BLOCK_SIZE_N),
+                               block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_N),
+                               order=(1,0))
+
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+
+    num_tiles = tl.cdiv(K, BLOCK_SIZE_K * SPLIT_K)
+
+    for k in range(num_tiles):
+        a = tl.load(a_ptrs, boundary_check=(0,1), padding_option="zero")
+        b = tl.load(b_ptrs, boundary_check=(0,1), padding_option="zero")
+
+        accumulator = tl.dot(a, b, accumulator)
+
+        a_ptrs = tl.advance(a_ptrs, [0, BLOCK_SIZE_K*SPLIT_K])
+        b_ptrs = tl.advance(b_ptrs, [BLOCK_SIZE_K*SPLIT_K, 0])
+
+    accumulator = accumulator.to(tl.float16)
+
+    # -----------------------------------------------------------
+    # Write back the block of the output matrix C with masks.
+    # Pointers for the output tile
+    _m = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    _n = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+    c_ptrs = c_ptr + (_m[:, None]*stride_cm + _n[None,:]*stride_cn)
+
+    # Reduce to the output tile over the different CTAs
+    tl.atomic_add(c_ptrs, accumulator, sem="relaxed")
+
+def matmul_split_k(a, b):
+    # Check constraints.
+    assert a.shape[1] == b.shape[0], "Incompatible dimensions"
+    assert a.is_contiguous(), "Matrix A must be contiguous"
+
+    M, K = a.shape
+    K, N = b.shape
+    # Allocate zeros since we will be adding to it
+    # Speed this up
+    c = torch.zeros((M, N), device=a.device, dtype=torch.float16)
+    grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),
+                         META['SPLIT_K'])
+    matmul_kernel_sparse_split_k[grid](
+        a, b, c,
+        M, N, K,
+        a.stride(0), a.stride(1),
+        b.stride(0), b.stride(1),
+        c.stride(0), c.stride(1)
+    )
+    return c
+
 def check_correctness ():
     # %%
     # Unit Test
@@ -237,9 +389,9 @@ def main(args):
             x_names=["M", "N", "K"],  # Argument names to use as an x-axis for the plot
             x_vals=get_tensor_sizes((args.bs,), "init_results"),
             line_arg="provider",  # Argument name whose value corresponds to a different line in the plot
-            line_vals=[ref_lib.lower(), "tritons"],  # Label name for the lines
-            line_names=[ref_lib, "Triton Sparse"],  # Line styles
-            styles=[("green", "-"), ("blue", "-")],
+            line_vals=[ref_lib.lower(), "tritons", "splitk"],  # Label name for the lines
+            line_names=[ref_lib, "Triton Sparse", "Sparse splitk"],  # Line styles
+            styles=[("green", "-"), ("blue", "-"), ("Orange", "-")],
             ylabel="TFLOPS",  # Label name for the y-axis
             plot_name=args.plot_name,
             args={}
@@ -264,6 +416,8 @@ def main(args):
             ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=quantiles)
         if provider == 'tritons':
             ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a_compressed, b), quantiles=quantiles)
+        if provider == 'splitk':
+            ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul_split_k(a_compressed, b), quantiles=quantiles)
         perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
         return perf(ms), perf(max_ms), perf(min_ms)
 
