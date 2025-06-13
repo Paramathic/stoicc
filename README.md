@@ -45,7 +45,7 @@ Currently, our sparsity implementation has three constraints.
 3. Only Ampere cards are currently supported with FP16 data types
 
 ## Next Steps
-Current code modifies the `3.1.x` Triton release, we are working on merging our changes with the Triton main branch and adding Hopper support.
+The main branch is based on the Triton `3.1.x` release with our modifications. We also maintain an experimental branch, `upstream_main_experimental`, which is based on recent changes to the upstream main branch and includes updates such as the transition to Linear Layouts. This branch is under active development, may not be stable, and is subject to breaking changes as we continue to add features like Hopper support.
 
 # Install from source
 
