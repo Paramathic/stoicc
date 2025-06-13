@@ -1238,7 +1238,8 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
 
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> shape,
                                           int bitwidth, int kWidth,
-                                          int opIdx) const;
+                                          int opIdx,
+                                          signed meta=-1) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
   }];
 
@@ -1333,7 +1334,8 @@ vecIdx (index of the element in the quad; this is always along the k-dim)
     ins
     "unsigned":$opIdx,
     "Attribute":$parent,
-    DefaultValuedParameter<"unsigned", "0">:$kWidth
+    DefaultValuedParameter<"unsigned", "0">:$kWidth,
+    DefaultValuedParameter<"signed", "-1">:$meta
   );
 
   let builders = [
@@ -1342,12 +1344,28 @@ vecIdx (index of the element in the quad; this is always along the k-dim)
                      "Type":$eltTy), [{
       NvidiaMmaEncodingAttr parentAttr = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent);
       if (!parentAttr || (!parentAttr.isAmpere() && !parentAttr.isHopper()))
-        return $_get(context, opIdx, parent, 0);
+        return $_get(context, opIdx, parent, 0, -1);
       // For MMAV2 and V3
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
       unsigned kWidth = 32 / bitwidth;
-      return $_get(context, opIdx, parent, kWidth);
-    }]>
+      return $_get(context, opIdx, parent, kWidth, -1);
+    }]>,
+    AttrBuilder<(ins "unsigned":$opIdx,
+                     "Attribute":$parent,
+                     "unsigned":$kWidth), [{
+          return $_get(context, opIdx, parent, kWidth, -1);
+        }]>,
+    AttrBuilder<(ins "unsigned":$opIdx,
+                     "Attribute":$parent,
+                     "Type":$eltTy,
+                     "signed":$meta), [{
+          NvidiaMmaEncodingAttr parentAttr = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent);
+          if (!parentAttr || !parentAttr.isAmpere())
+            return $_get(context, opIdx, parent, 0, -1);
+          unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
+          unsigned kWidth = 32 / bitwidth;
+          return $_get(context, opIdx, parent, kWidth, meta);
+        }]>
   ];
 
   let assemblyFormat = "`<` `{` struct(params) `}` `>`";

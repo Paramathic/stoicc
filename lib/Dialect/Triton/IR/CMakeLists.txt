@@ -11,6 +11,7 @@ add_triton_library(TritonIR
 
   DEPENDS
   TritonTableGen
+  TritonAttrDefsIncGen
   TritonCanonicalizeIncGen
 
   LINK_LIBS PUBLIC

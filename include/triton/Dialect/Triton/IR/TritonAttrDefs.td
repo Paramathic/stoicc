@@ -1,7 +1,9 @@
 #ifndef TRITON_ATTR_DEFS
 #define TRITON_ATTR_DEFS
 
+include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/EnumAttr.td"
+include "triton/Dialect/Triton/IR/TritonDialect.td"
 
 // Attributes for LoadOp and StoreOp
 def TT_CacheModifierAttr : I32EnumAttr<
@@ -147,6 +149,40 @@ def TT_ScaleDotElemTypeAttr : I32EnumAttr<
       I32EnumAttrCase<"FP16", 6, "fp16">
     ]>{
   let cppNamespace = "::mlir::triton";
+}
+
+class Triton_Attr<string name, string attrMnemonic, list<Trait> traits = [],
+                  Dialect dialect = Triton_Dialect,
+                  string baseCppClass = "::mlir::Attribute">
+    : AttrDef<dialect, name, traits, baseCppClass> {
+    let description = [{
+    Triton Tensors can have attributes attached to them that describe special properties, e.g. sparsity
+    }];
+    let attrName = "triton." # attrMnemonic;
+
+}
+
+// Sparsity Attribute for Triton Tensors
+def SparseAttr : Triton_Attr<"Sparse", "sparse"> {
+    let mnemonic = "sparse";
+    let summary = "Describing Sparsity";
+    let description = [{
+        An encoding describing the type of sparsity for this tensor.
+
+        If this attribute is attached to a tensor, then the passes throughout the compiler will
+        treat the tensor as a sparse tensor
+    }];
+    let parameters = (
+        ins
+        StringRefParameter<>:$sparsityFormat // super simple for now (just sparsity format)
+    );
+    /** let builders = [
+        AttrBuilder<(ins "StringRefParameter<>":$sparsityFormat),
+            [{
+                return $_get(context, sparsityFormat);
+            }]>
+    ];*/
+    let assemblyFormat = "`<` $sparsityFormat `>`";
 }
 
 #endif

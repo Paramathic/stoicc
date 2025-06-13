@@ -26,6 +26,10 @@ int getAddressSpace(Type type);
 
 Type getElementTypeOfTensorPointerType(Type type);
 
+Type getMaybeSparseTensorPointerType(Type type, int addressSpace);
+
+Type getMaybeSparsePointeeType(Type type);
+
 Type getI1SameShape(Type type);
 
 Type getI32SameShape(Type type);
@@ -33,6 +37,18 @@ Type getI32SameShape(Type type);
 Type getPointerTypeSameShape(Type type);
 
 Type getPointerTypeToElement(Type type);
+
+bool isSparseTensor(RankedTensorType type);
+
+bool isSparseTensorPointer(PointerType type);
+
+bool isSparsePointer(PointerType type);
+
+SmallVector<int64_t> getDenseTensorValuesShape(RankedTensorType type);
+
+Type getSparsityMetadataElementType(Attribute encoding);
+
+
 
 } // namespace triton
 

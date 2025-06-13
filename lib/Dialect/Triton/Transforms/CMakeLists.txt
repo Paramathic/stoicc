@@ -7,6 +7,7 @@ add_triton_library(TritonTransforms
   LoopInvariantCodeMotion.cpp
   LoopUnroll.cpp
   ReorderBroadcast.cpp
+  DecomposeSparseTensors.cpp
   RewriteTensorPointer.cpp
 
   DEPENDS

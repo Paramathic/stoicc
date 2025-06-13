@@ -240,6 +240,56 @@ public:
   }
 };
 
+// AddIOp(DotOp(a, b, c), d) and c==0 => DotOp(a, b, d)
+// AddIOp(d, DotOp(a, b, c)) and c==0 => DotOp(a, b, d)
+// AddFOp(DotOp(a, b, c), d) and c==0 => DotOp(a, b, d)
+// AddFOp(d, DotOp(a, b, c)) and c==0 => DotOp(a, b, d)
+template <typename OpTy>
+class CombineDotAddPattern : public RewritePattern {
+public:
+  // TODO(Victor): Value for benefit?
+  CombineDotAddPattern(MLIRContext *context) : RewritePattern(OpTy::getOperationName(), 3, context) { }
+
+  LogicalResult matchAndRewrite(Operation *op,
+                                PatternRewriter &rewriter) const override {
+    auto addOp = llvm::dyn_cast<OpTy>(op);
+    if (!addOp)
+      return failure();
+
+    Value lhs = addOp.getLhs();
+    Value rhs = addOp.getRhs();
+
+    auto dotOp = llvm::dyn_cast_or_null<DotOp>(lhs.getDefiningOp());
+    Value add;
+    if (!dotOp) {
+      dotOp = llvm::dyn_cast_or_null<DotOp>(rhs.getDefiningOp());
+      if (!dotOp) {
+        return failure();
+      }
+      add = lhs;
+    } else {
+      add = rhs;
+    }
+
+    // Constraints
+    if (!isZero(dotOp.getC()) || !dotOp.getResult().hasOneUse())
+      return failure();
+
+    auto fpAddOp = llvm::dyn_cast<arith::AddFOp>(op);
+    if (fpAddOp && dotOp.getMaxNumImpreciseAcc() != 0)
+      return failure();
+
+    rewriter.replaceAllUsesWith(addOp.getResult(), dotOp.getResult());
+    rewriter.modifyOpInPlace(dotOp, [&]() {
+      dotOp->replaceUsesOfWith(dotOp.getC(), add);
+    });
+    rewriter.eraseOp(addOp);
+    return success();
+  }
+};
+
+
+
 class CombineOpsPass : public TritonCombineOpsBase<CombineOpsPass> {
 public:
   void runOnOperation() override {
@@ -248,10 +298,8 @@ public:
     ModuleOp m = getOperation();
 
     // Dot Add %{
-    patterns.add<CombineDotAddIPattern>(context);
-    patterns.add<CombineDotAddFPattern>(context);
-    patterns.add<CombineDotAddIRevPattern>(context);
-    patterns.add<CombineDotAddFRevPattern>(context);
+    patterns.add<CombineDotAddPattern<arith::AddIOp>>(context);
+    patterns.add<CombineDotAddPattern<arith::AddFOp>>(context);
     // %}
     patterns.add<CombineSelectMaskedLoadPattern>(context);
     patterns.add<CombineAddPtrPattern>(context);

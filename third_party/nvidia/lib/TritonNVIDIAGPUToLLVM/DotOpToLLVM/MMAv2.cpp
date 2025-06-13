@@ -241,6 +241,34 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
   return vals;
 }
 
+ValueTableV2 getValuesFromDotMetaOperandLayoutStruct(
+    const LLVMTypeConverter *typeConverter, Location loc,
+    ConversionPatternRewriter &rewriter, Value value, int batch, int n0, int n1,
+    RankedTensorType type) {
+
+  auto elems = unpackLLElements(loc, value, rewriter);
+  auto builder = TritonLLVMOpBuilder(loc, rewriter);
+  int offset = 0;
+  ValueTableV2 vals;
+  for (auto b = 0; b < batch; ++b)
+    for (auto i = 0; i < n0; ++i) {
+      for (auto j = 0; j < n1; j++) {
+        auto e0 = elems[offset++];
+        auto e1 = elems[offset++];
+        auto vecTy = vec_ty(e1.getType(), 2);
+        Value vec = rewriter.create<LLVM::UndefOp>(loc, vecTy);
+        vec = builder.insert_element(vecTy, vec, e0,
+                                     rewriter.create<LLVM::ConstantOp>(loc, rewriter.getZeroAttr(int_ty(32))));
+        vec = builder.insert_element(vecTy, vec, e1,
+                                     rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI32IntegerAttr(1)));
+        auto reg = builder.bitcast(vec, int_ty(32));
+
+        vals[{b, i, j}] = reg;
+      }
+    }
+  return vals;
+}
+
 enum class TensorCoreType : uint8_t {
   // floating-point tensor core instr
   FP32_FP16_FP16_FP32 = 0, // default
@@ -368,6 +396,15 @@ inline static const std::map<TensorCoreType, std::string> mmaInstrPtxAmpere = {
      "mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e4m3.f32"},
 };
 
+inline static const std::map<TensorCoreType, std::string> spmmaInstrPtxAmpere = {
+  {TensorCoreType::FP32_FP16_FP16_FP32,
+   "mma.sp.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32"},
+  {TensorCoreType::FP32_BF16_BF16_FP32,
+   "mma.sp.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32"},
+  {TensorCoreType::FP32_TF32_TF32_FP32,
+   "mma.sp.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32"}
+};
+
 static void callMmaTuringInt8(PTXBuilder &builder, int b, int m, int n, int k,
                               mlir::triton::PTXInstr &mma, unsigned numMmaRets,
                               unsigned colsPerThread, int numCPackedElem,
@@ -447,7 +484,7 @@ static void callMmaAmpere(PTXBuilder &builder, int b, int m, int n, int k,
                           unsigned colsPerThread, int numCPackedElem,
                           unsigned batchOffset, ValueTableV2 &ha,
                           ValueTableV2 &hb, const SmallVector<Value> &fc,
-                          bool isAccF16, bool isIntMMA) {
+                          ValueTableV2 &he, bool isAccF16, bool isIntMMA, int sparsitySelector, bool isSparse) {
   auto retArgs =
       builder.newListOperand(numMmaRets, isIntMMA || isAccF16 ? "=r" : "=f");
   auto cArgs = builder.newListOperand();
@@ -457,22 +494,48 @@ static void callMmaAmpere(PTXBuilder &builder, int b, int m, int n, int k,
         std::to_string(i)));
     // reuse the output registers
   }
-  auto aArgs = builder.newListOperand({
-      {ha[{b, m, k}], "r"},
-      {ha[{b, m + 1, k}], "r"},
-      {ha[{b, m, k + 1}], "r"},
-      {ha[{b, m + 1, k + 1}], "r"},
-  });
-  auto bArgs =
-      builder.newListOperand({{hb[{b, n, k}], "r"}, {hb[{b, n, k + 1}], "r"}});
-  mma(retArgs, aArgs, bArgs, cArgs);
+  if (isSparse) {
+    PTXBuilder::Operand *aArgs;
+    if (sparsitySelector < 0) {
+      sparsitySelector = k % 4;
+      aArgs = builder.newListOperand({{ha[{b, m, k}], "r"}, {ha[{b, m + 1, k}], "r"}});
+    } else {
+      if (sparsitySelector % 2)
+        aArgs = builder.newListOperand(
+            {{ha[{b, m, k + 1}], "r"}, {ha[{b, m + 1, k + 1}], "r"}});
+      else
+        aArgs = builder.newListOperand(
+            {{ha[{b, m, k}], "r"}, {ha[{b, m + 1, k}], "r"}});
+    }
+    auto bArgs =
+      builder.newListOperand({{hb[{b, n, 2*k}], "r"}, {hb[{b, n, 2*k + 1}], "r"}});
+
+    PTXBuilder::Operand *eArgs = builder.newOperand(he[{b, m / 2, k / 4}], "r");
+    PTXBuilder::Operand *spSel = builder.newConstantOperand(sparsitySelector);
+
+    mma(retArgs, aArgs, bArgs, cArgs, eArgs, spSel);
+    // Add sparse selector
+  } else {
+    auto aArgs = builder.newListOperand({
+    {ha[{b, m, k}], "r"},
+    {ha[{b, m + 1, k}], "r"},
+    {ha[{b, m, k + 1}], "r"},
+    {ha[{b, m + 1, k + 1}], "r"},
+    });
+    auto bArgs =
+        builder.newListOperand({{hb[{b, n, k}], "r"}, {hb[{b, n, k + 1}], "r"}});
+    mma(retArgs, aArgs, bArgs, cArgs);
+  }
+
 }
 
 LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          ConversionPatternRewriter &rewriter, Location loc,
-                         Value a, Value b, Value c, Value d, Value loadedA,
-                         Value loadedB, Value loadedC, DotOp op,
+                         Value a, Value b, Value c, Value d, Value e, Value loadedA,
+                         Value loadedB, Value loadedC, Value loadedE, DotOp op,
                          DotOpAdaptor adaptor, bool isTuring) {
+  if (isTuring && e) llvm::report_fatal_error("Sparsity support only available in Ampere.");
+
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = c.getContext();
   auto aTensorTy = cast<RankedTensorType>(a.getType());
@@ -494,10 +557,12 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
       cast<NvidiaMmaEncodingAttr>(dotOpB.getParent())
           .getRepForOperand(bShapePerCTA, bitwidth, kWidth, dotOpB.getOpIdx());
 
-  assert(repA[2] == repB[1]);
   assert(repA[0] == repB[0]);
-  int repM = repA[1], repN = repB[2], repK = repA[2];
+  int repM = repA[1], repN = repB[2], repK = repB[1];
   int repBatch = repA[0];
+  if (!e) assert(repA[2] == repB[1]);
+  else   assert(repBatch == 1); // We support one batch spmma right now
+
 
   // We can reuse the same iteration order in
   // getValuesFromDotOperandLayoutStruct as both a and b are K-major
@@ -505,7 +570,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                                                        aShapePerCTA.size(),
                                                        /*kContig=*/true));
   auto ha = getValuesFromDotOperandLayoutStruct(
-      typeConverter, loc, rewriter, loadedA, repBatch, repM, repK, aTensorTy);
+      typeConverter, loc, rewriter, loadedA, repBatch, repM, e ? std::max(1, repK/2) : repK, aTensorTy);
 
   assert(dotOpB.getRepOrder() == getOrderForDotOperand(dotOpB.getOpIdx(),
                                                        bShapePerCTA.size(),
@@ -517,10 +582,23 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   auto numMmaRets = dTensorTy.getElementType().getIntOrFloatBitWidth() / 8;
   int numCPackedElem = 4 / numMmaRets;
 
+  ValueTableV2 he;
+  if (e) {
+    auto eTensorTy = cast<RankedTensorType>(e.getType());
+    // TODO(Victor): Remove
+    // auto eShapePerCTA = triton::gpu::getShapePerCTA(eTensorTy);
+    // auto dotOpE = cast<DotOperandEncodingAttr>(eTensorTy.getEncoding());
+    // auto repE = cast<NvidiaMmaEncodingAttr>(dotOpE.getParent())
+    //         .getRepForOperand(eShapePerCTA, bitwidth, kWidth, dotOpE.getOpIdx(),
+    //                              dotOpE.getMeta());
+    he = getValuesFromDotMetaOperandLayoutStruct(
+     typeConverter, loc, rewriter, loadedE, repBatch, repM, std::max(1, repK/4), eTensorTy);
+  }
+
   auto mmaType = getMmaType(op);
 
   const auto &mmaInstructions =
-      isTuring ? mmaInstrPtxTuring : mmaInstrPtxAmpere;
+      isTuring ? mmaInstrPtxTuring : (e ? spmmaInstrPtxAmpere : mmaInstrPtxAmpere);
   if (mmaInstructions.find(mmaType) == mmaInstructions.end()) {
     return emitError(loc, "Unsupported MMA instruction for the given mma type");
   }
@@ -546,8 +624,8 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                           numCPackedElem, ha, hb, fc, isAccF16);
     } else { // Ampere
       callMmaAmpere(builder, b, m, n, k, mma, numMmaRets, colsPerThread,
-                    numCPackedElem, batchOffset, ha, hb, fc, isAccF16,
-                    isIntMMA);
+                    numCPackedElem, batchOffset, ha, hb, fc, he, isAccF16,
+                    isIntMMA, op.getSpSelector(), (bool) e);
     }
 
     Value mmaOut =
@@ -564,7 +642,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
     for (int k = 0; k < repK; ++k)
       for (int m = 0; m < repM; ++m)
         for (int n = 0; n < repN; ++n)
-          callMma(b, 2 * m, n, 2 * k);
+          callMma(b, 2 * m, n, k * (e ? 1 : 2));
 
   Type resElemTy = dTensorTy.getElementType();
 
@@ -597,8 +675,8 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   Value loadedC =
       loadC(op.getC(), adaptor.getC(), typeConverter, op.getLoc(), rewriter);
   return convertDot(typeConverter, rewriter, op.getLoc(), op.getA(), op.getB(),
-                    op.getC(), op.getD(), adaptor.getA(), adaptor.getB(),
-                    loadedC, op, adaptor, isTuring);
+                    op.getC(), op.getD(), op.getE(), adaptor.getA(), adaptor.getB(),
+                    loadedC, adaptor.getE(), op, adaptor, isTuring);
 }
 
 // Convert to mma.m16n8k8

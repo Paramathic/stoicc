@@ -32,13 +32,17 @@ LogicalResult OpTrait::impl::verifyEquivalentType(Type typeA, Type typeB) {
 }
 
 static LogicalResult verifySameEncoding(Type typeA, Type typeB,
-                                        bool allowTensorPointerType) {
+                                        bool allowTensorPointerType,
+                                        bool ignoreSparseEncodings) {
   // TODO(Keren): the allowTensorPointerType argument is a hack to allow.
   // The type checking code is kind of a mess with the current design.
+  // TODO(Victor): the ignoreSparseEncodings is implemented in-same-spirit.
   auto getEncoding = [=](Type type) -> Attribute {
     Attribute ret;
     if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
-      ret = tensorType.getEncoding();
+      if (!triton::isSparseTensor(tensorType) || !ignoreSparseEncodings) {
+        ret = tensorType.getEncoding();
+      }
     }
     if (!allowTensorPointerType) {
       assert(!triton::isTensorPointerType(type));
@@ -54,20 +58,21 @@ static LogicalResult verifySameEncoding(Type typeA, Type typeB,
 
 LogicalResult
 OpTrait::impl::verifySameOperandsEncoding(Operation *op,
-                                          bool allowTensorPointerType) {
+                                          bool allowTensorPointerType,
+                                          bool ignoreSparseEncodings) {
   if (failed(verifyAtLeastNOperands(op, 1)))
     return failure();
 
   auto type = op->getOperand(0).getType();
   for (auto opType : llvm::drop_begin(op->getOperandTypes(), 1))
-    if (failed(verifySameEncoding(opType, type, allowTensorPointerType)))
+    if (failed(verifySameEncoding(opType, type, allowTensorPointerType, ignoreSparseEncodings)))
       return op->emitOpError() << "requires the same encoding for all operands";
 
   return success();
 }
 
 LogicalResult OpTrait::impl::verifySameOperandsAndResultEncoding(
-    Operation *op, bool allowTensorPointerType) {
+    Operation *op, bool allowTensorPointerType, bool ignoreSparseEncodings) {
   if (op->getNumOperands() == 0)
     return success();
 
@@ -77,7 +82,7 @@ LogicalResult OpTrait::impl::verifySameOperandsAndResultEncoding(
 
   auto type = op->getOperand(0).getType();
   for (auto resultType : op->getResultTypes())
-    if (failed(verifySameEncoding(resultType, type, allowTensorPointerType)))
+    if (failed(verifySameEncoding(resultType, type, allowTensorPointerType, ignoreSparseEncodings)))
       return op->emitOpError()
              << "requires the same encoding for all operands and results";
 
@@ -182,11 +187,11 @@ LogicalResult OpTrait::impl::verifyTensorLayouts(Operation *op) {
   return success();
 }
 
-static ArrayRef<int64_t> getTypeShape(Type type) {
+static SmallVector<int64_t> getTypeShape(Type type) {
   auto rankedType = dyn_cast<RankedTensorType>(type);
   if (auto ptrType = dyn_cast<triton::PointerType>(type))
     rankedType = dyn_cast<RankedTensorType>(ptrType.getPointeeType());
-  return rankedType ? rankedType.getShape() : ArrayRef<int64_t>();
+  return rankedType ? triton::getDenseTensorValuesShape(rankedType) : SmallVector<int64_t>();
 }
 
 LogicalResult OpTrait::impl::verifySameLoadStoreOperandsShape(Operation *op) {

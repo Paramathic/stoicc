@@ -173,6 +173,10 @@ template <typename T> auto seq(T start, T end, T step) {
                          [=](T i) { return start + i * step; });
 }
 
+// Sparse utilities
+inline bool isSparseDot(triton::DotOp op) {
+  return op.getSparseIndex() != -1;
+}
 } // namespace triton
 } // namespace mlir
 

@@ -302,9 +302,9 @@ def TT_StoreOp : TT_Op<"store", [
   SameLoadStoreOperandsShape,
   SameLoadStoreOperandsEncoding,
   TypesMatchWith<"value type matches ptr type", "ptr", "value",
-                 "getPointeeType($_self)">,
+                 "getMaybeSparsePointeeType($_self)">,
   TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
-                 "getI1SameShape(getPointeeType($_self))",
+                 "getI1SameShape(getMaybeSparsePointeeType($_self))",
                  "($_op.getOperands().size() <= 2) || std::equal_to<>()">
 ]> {
     let summary = "Store by a tensor of pointers or by a tensor pointer";
@@ -658,17 +658,38 @@ def TT_DotOp : TT_Op<"dot", [Pure,
       TT_FpIntTensor:$a,
       TT_FpIntTensor:$b,
       TT_FpIntTensor:$c,
+      Optional<TT_IntTensor>:$e,
       DefaultValuedAttr<TT_InputPrecisionAttr, "::mlir::triton::InputPrecision::IEEE">:$inputPrecision,
-      DefaultValuedAttr<I32Attr, "0">:$maxNumImpreciseAcc
+      DefaultValuedAttr<I32Attr, "0">:$maxNumImpreciseAcc,
+      DefaultValuedAttr<I32Attr, "-1">:$sparseIndex,
+      DefaultValuedAttr<I32Attr, "-1">:$spSelector
     );
+
+    let builders = [
+            OpBuilder<(ins
+                "Value":$a,
+                "Value":$b,
+                "Value":$c,
+                CArg<"triton::InputPrecision", "triton::InputPrecision::IEEE">:$inputPrecision,
+                CArg<"uint32_t", "0">:$maxNumImpreciseAcc
+            )>,
+            OpBuilder<(ins
+                "Type":$type,
+                "Value":$a,
+                "Value":$b,
+                "Value":$c,
+                CArg<"triton::InputPrecision", "triton::InputPrecision::IEEE">:$inputPrecision,
+                CArg<"uint32_t", "0">:$maxNumImpreciseAcc
+            )>
+        ];
 
     let results = (outs TT_FpIntTensor:$d);
 
     // attr-dict prints enums as integers.  To get inputPrecision printed as a
     // string, we need to specify it explicitly.
     let assemblyFormat = [{
-      $a`,` $b`,` $c (`,` `inputPrecision` `=` $inputPrecision^)? attr-dict `:`
-      type($a) `*` type($b) `->` type($d)
+      $a`,` $b`,` $c (`,` $e^)? (`,` `sparseIndex` `=` $sparseIndex^)? (`,` `inputPrecision` `=` $inputPrecision^)? attr-dict `:`
+      type($a) (`,` type($e)^)? `*` type($b) `->` type($d)
     }];
     let hasVerifier = 1;
 }
@@ -959,7 +980,7 @@ def TT_MakeTensorPtrOp : TT_Op<"make_tensor_ptr",
                                 SameVariadicOperandSize,
                                 TypesMatchWith<"infer pointer type from the result type",
                                                "result", "base",
-                                               "getPointerType(getElementTypeOfTensorPointerType($_self), getAddressSpace($_self))">]> {
+                                               "getMaybeSparseTensorPointerType($_self, getAddressSpace($_self))">]> {
   let summary = "Make a tensor pointer type with meta information of the parent tensor and the block specified";
 
   let description = [{
@@ -992,6 +1013,35 @@ def TT_MakeTensorPtrOp : TT_Op<"make_tensor_ptr",
         "ArrayRef<int32_t>":$order
     )>
   ];
+}
+
+//
+//  Sparse Values Op
+//
+def TT_SparseValuesOp : TT_Op<"sparse_values",
+                              [Pure,
+                             ]> { // TODO (Arya) : Add a verifier to make sure the types are correct
+  let summary = "Get the values tensor of the sparse tensor";
+
+  let description = [{
+    `tt.sparse_values` takes a sparse tensor and returns the underlying dense values tensor.
+
+    For example, given tensor<128x128xf16, #tt.sparse<"NV24">>, it returns tensor<128x64xf16> where
+    the returned tensor is the values tensor of the sparse 2:4 NVIDIA tensor.
+  }];
+
+  let arguments = (ins TT_Tensor:$base);
+
+  let results = (outs TT_Tensor:$result);
+
+  let assemblyFormat = "$base attr-dict `:` type($base) `->` type($result)";
+
+  let builders = [
+    OpBuilder<(ins
+        "Value":$base
+    )>
+  ];
+
 }
 
 //

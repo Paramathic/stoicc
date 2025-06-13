@@ -25,6 +25,7 @@
 #include "mlir/Transforms/LocationSnapshot.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Attributes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -986,13 +987,26 @@ void init_triton_ir(py::module &&m) {
              return self.getBuilder().getF64Type();
            })
       .def("get_ptr_ty",
-           [](TritonOpBuilder &self, Type &type, int addrSpace) -> Type {
-             return PointerType::get(type, addrSpace);
+           [](TritonOpBuilder &self, Type &type, int addrSpace,
+              const std::string &sparseEncoding="") -> Type {
+             if (sparseEncoding.empty())
+               return PointerType::get(type, addrSpace);
+             auto encoding = triton::SparseAttr::get(
+                 self.getBuilder().getContext(), sparseEncoding);
+             return PointerType::get(type, addrSpace, encoding);
            })
       .def("get_block_ty",
            [](TritonOpBuilder &self, Type &elementType,
               std::vector<int64_t> &shape) -> Type {
              return RankedTensorType::get(shape, elementType);
+           })
+      .def("get_sparse_tensor_ty",
+           [](TritonOpBuilder &self, Type &elementType,
+              std::vector<int64_t> &shape) -> Type {
+             auto context = self.getBuilder().getContext();
+             // TODO: Get the encoding here
+             auto sparseEncoding = triton::SparseAttr::get(context, "NV24");
+             return RankedTensorType::get(shape, elementType, sparseEncoding);
            })
       .def("get_function_ty",
            [](TritonOpBuilder &self, std::vector<Type> inTypes,
@@ -1790,6 +1804,11 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value &ptr,
               std::vector<Value> &offsets) -> Value {
              return self.create<AdvanceOp>(ptr.getType(), ptr, offsets);
+           })
+      // Sparse Tensor Ops
+      .def("create_sparse_values",
+           [](TritonOpBuilder &self, Value &base) -> Value {
+             return self.create<SparseValuesOp>(base);
            })
       // Make a tensor descriptor
       .def("create_make_tensor_descriptor",

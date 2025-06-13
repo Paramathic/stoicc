@@ -98,6 +98,7 @@ from .core import (
     reduce,
     reshape,
     slice,
+    sparse_type,
     split,
     static_assert,
     static_print,
@@ -241,6 +242,7 @@ __all__ = [
     "sin",
     "softmax",
     "sort",
+    "sparse_tensor",
     "split",
     "sqrt",
     "sqrt_rn",
@@ -275,6 +277,12 @@ def str_to_ty(name):
     if isinstance(name, tuple):
         fields = type(name).__dict__.get("_fields", None)
         return tuple_type([str_to_ty(x) for x in name], fields)
+
+    if name.startswith("sparse"):
+        name = name.split('_')
+        element_ty = str_to_ty(name[1])
+        sparsity_format = name[2]
+        return pointer_type(element_ty, sparsity_encoding=sparsity_format)
 
     if name[0] == "*":
         name = name[1:]

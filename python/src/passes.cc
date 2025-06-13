@@ -38,6 +38,8 @@ void init_triton_passes_ttir(py::module &&m) {
   using namespace mlir::triton;
   ADD_PASS_WRAPPER_0("add_combine", createCombineOpsPass);
   ADD_PASS_WRAPPER_0("add_reorder_broadcast", createReorderBroadcastPass);
+  ADD_PASS_WRAPPER_0("add_decompose_sparse_tensors",
+                     createDecomposeSparseTensorsPass);
   ADD_PASS_WRAPPER_0("add_rewrite_tensor_pointer",
                      createRewriteTensorPointerPass);
   ADD_PASS_WRAPPER_0("add_loop_unroll", createLoopUnrollPass);

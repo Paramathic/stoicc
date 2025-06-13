@@ -12,6 +12,7 @@
 
 #include "mlir/Transforms/InliningUtils.h"
 #include "triton/Dialect/Triton/IR/AttrInterfaces.cpp.inc"
+#include "triton/Dialect/Triton/IR/TritonAttrDefs.cpp.inc"
 #include "triton/Dialect/Triton/IR/Dialect.cpp.inc"
 #include "triton/Dialect/Triton/IR/OpInterfaces.cpp.inc"
 
@@ -79,8 +80,19 @@ struct TritonInlinerInterface : public DialectInlinerInterface {
 
 } // namespace
 
+//===----------------------------------------------------------------------===//
+// Attribute methods
+//===----------------------------------------------------------------------===//
+#define GET_ATTRDEF_CLASSES
+#include "triton/Dialect/Triton/IR/TritonAttrDefs.cpp.inc"
+
 void TritonDialect::initialize() {
   registerTypes();
+
+  addAttributes<
+#define GET_ATTRDEF_LIST
+#include "triton/Dialect/Triton/IR/TritonAttrDefs.cpp.inc"
+      >();
 
   addOperations<
 #define GET_OP_LIST

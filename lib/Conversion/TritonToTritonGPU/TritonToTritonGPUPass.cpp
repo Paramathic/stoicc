@@ -258,23 +258,43 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
     Value c = adaptor.getC();
     if (!mlir::isa<triton::gpu::DotOperandEncodingAttr>(aEncoding)) {
       Attribute encoding = triton::gpu::DotOperandEncodingAttr::get(
-          getContext(), 0, dEncoding, aEltType);
+          getContext(), 0, dEncoding, aEltType, (op.getSparseIndex() == 0)? 0 : -1);
       auto dstType =
           RankedTensorType::get(aType.getShape(), aEltType, encoding);
       a = rewriter.create<triton::gpu::ConvertLayoutOp>(a.getLoc(), dstType, a);
     }
     if (!mlir::isa<triton::gpu::DotOperandEncodingAttr>(bEncoding)) {
       Attribute encoding = triton::gpu::DotOperandEncodingAttr::get(
-          getContext(), 1, dEncoding, bEltType);
+          getContext(), 1, dEncoding, bEltType, (op.getSparseIndex() == 1)? 0 : -1);
       auto dstType =
           RankedTensorType::get(bType.getShape(), bEltType, encoding);
       b = rewriter.create<triton::gpu::ConvertLayoutOp>(b.getLoc(), dstType, b);
     }
     c = rewriter.create<triton::gpu::ConvertLayoutOp>(c.getLoc(), retType, c);
 
+    Value e = nullptr;
+    if(isSparseDot(op)) {
+      // The dot operation is sparse, we have to also generate the metadata
+      auto sparseIndex = op.getSparseIndex();
+      assert(op.getE());
+      auto eType = cast<RankedTensorType>(adaptor.getE().getType());
+      Type eEltType = eType.getElementType();
+      Attribute eEncoding = eType.getEncoding();
+      if (!eEncoding) return failure();
+      e = adaptor.getE();
+      if (!mlir::isa<triton::gpu::DotOperandEncodingAttr>(eEncoding)) {
+        Attribute encoding = triton::gpu::DotOperandEncodingAttr::get(
+            getContext(), sparseIndex, dEncoding, eEltType, 1);
+        auto dstType = RankedTensorType::get(eType.getShape(), eEltType, encoding);
+        e = rewriter.create<triton::gpu::ConvertLayoutOp>(e.getLoc(), dstType, e);
+      }
+    }
+
     addNamedAttrs(rewriter.replaceOpWithNewOp<triton::DotOp>(
-                      op, retType, a, b, c, adaptor.getInputPrecision(),
-                      adaptor.getMaxNumImpreciseAcc()),
+                      op, retType, a, b, c, e,
+                      adaptor.getInputPrecision(),
+                      adaptor.getMaxNumImpreciseAcc(),
+                      adaptor.getSparseIndex()),
                   adaptor.getAttributes());
     return success();
   }

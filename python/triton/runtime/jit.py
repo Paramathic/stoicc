@@ -13,6 +13,7 @@ from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overlo
 from triton.tools.tensor_descriptor import TensorDescriptor
 from types import ModuleType
 from .. import knobs
+from triton.sparsity.compressed_sparse import CompressedSparse
 from ..runtime.driver import driver
 from .._utils import find_paths_if, get_iterable_path
 
@@ -324,6 +325,14 @@ def create_specialize_impl(specialize_extra):
                 return ("i64", key)
         elif isinstance(arg, float):
             return ("fp32", None)
+        elif isinstance(arg, CompressedSparse):
+            dsk = (arg.dtype + str(arg.element_ty), is_const)
+            res = dtype2str.get(dsk, None)
+            if res is None:
+                res = (f"{arg.dtype}_{type_canonicalisation_dict[str(arg.element_ty).split('.')[-1]]}"
+                       f"_{sparse_type_canonicalisation[arg.sparsity_pattern]}")
+            key = specialize_extra(arg, "sparse_tensor", align=align) if specialize_value else None
+            return (res, key)
         elif hasattr(arg, "data_ptr"):
             # dtypes are hashable so we can memoize this mapping:
             dsk = (arg.dtype, is_const)
@@ -353,6 +362,10 @@ def create_specialize_impl(specialize_extra):
             raise TypeError("Unsupported type: %s" % type(arg))
 
     return specialize_impl
+
+sparse_type_canonicalisation = {
+    "NV24": "NV24"
+}
 
 
 def mangle_type(arg, specialize=False):
@@ -560,6 +573,14 @@ class JITFunction(KernelInterface[T]):
         binder = create_function_from_signature(self.signature, self.params, backend)
         return {}, target, backend, binder
 
+    def decompose_sparse_vals(self, vals):
+        return tuple(new_val
+                     for val in vals
+                     for new_val in
+                     ([val.data, val.metadata]
+                      if isinstance(val, CompressedSparse) else [val])
+                     )
+
     def run(self, *args, grid, warmup, **kwargs):
         kwargs["debug"] = kwargs.get("debug", self.debug) or knobs.runtime.debug
 
@@ -629,9 +650,10 @@ class JITFunction(KernelInterface[T]):
             grid_1 = grid[1] if grid_size > 1 else 1
             grid_2 = grid[2] if grid_size > 2 else 1
             # launch kernel
+            args = self.decompose_sparse_vals(bound_args.values())
             launch_metadata = kernel.launch_metadata(grid, stream, *bound_args.values())
             kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
-                       knobs.runtime.launch_enter_hook, knobs.runtime.launch_exit_hook, *bound_args.values())
+                       knobs.runtime.launch_enter_hook, knobs.runtime.launch_exit_hook, *args)
         return kernel
 
     def repr(self, _):

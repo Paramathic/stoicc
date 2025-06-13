@@ -607,10 +607,8 @@ class CudaLauncher(object):
 
     def __init__(self, src, metadata):
         constants = src.constants if hasattr(src, "constants") else dict()
-        arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
-        constants = {arg_idx(idx): value for idx, value in constants.items()}
-        signature = {idx: value for idx, value in src.signature.items()}
-        src = make_launcher(constants, signature)
+        sig, const, ids = self.construct_launcher_arguments(src.fn.arg_names, src.signature, constants)
+        src = make_launcher(const, sig)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.num_ctas = functools.reduce(operator.mul, metadata.cluster_dims, 1)
         tensordesc_meta = getattr(metadata, "tensordesc_meta", None)
@@ -622,6 +620,34 @@ class CudaLauncher(object):
         self.global_scratch_align = metadata.global_scratch_align
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
         self.launch_pdl = metadata.launch_pdl
+
+    def construct_launcher_arguments(self, arg_names, signature, constants):
+        decomposed_args = []
+        new_signature = {}
+        new_constants = {}
+        new_ids = {'ids_of_const_exprs':[]}
+        for index, arg in enumerate(arg_names):
+            if arg in signature and 'NV24' in signature[arg]:
+                # This is a 2:4 sparse argument. Decompose it.
+                # Decomposing it to its data and metadata
+                _, type, _ = signature[arg].split('_')
+                values_type = "*"+type
+                metadata_type = "*i8"
+                new_signature[len(decomposed_args)] = values_type
+                decomposed_args.append(arg + "_values")
+                new_signature[len(decomposed_args)] = metadata_type
+                decomposed_args.append(arg + "_metadata")
+                continue
+
+            if arg in signature:
+                new_signature[len(decomposed_args)] = signature[arg]
+
+            if arg in constants:
+                new_constants[len(decomposed_args)] = constants[arg]
+                new_ids['ids_of_const_exprs'].append(len(decomposed_args))
+
+            decomposed_args.append(arg)
+        return new_signature, new_constants, new_ids
 
     def __call__(self, gridX, gridY, gridZ, stream, function, *args):
         if self.global_scratch_size > 0:

@@ -27,11 +27,13 @@ LogicalResult verifyTensorSize(Operation *op);
 LogicalResult verifyTensorLayouts(Operation *op);
 
 LogicalResult verifySameOperandsEncoding(Operation *op,
-                                         bool allowTensorPointerType = false);
+                                         bool allowTensorPointerType = false,
+                                         bool ignoreSparseEncodings = false);
 LogicalResult verifyEquivalentType(Type typeA, Type typeB);
 LogicalResult
 verifySameOperandsAndResultEncoding(Operation *op,
-                                    bool allowTensorPointerType = false);
+                                    bool allowTensorPointerType = false,
+                                    bool ignoreSparseEncodings = false);
 
 LogicalResult verifySameLoadStoreOperandsShape(Operation *op);
 
@@ -100,7 +102,8 @@ class SameLoadStoreOperandsEncoding
 public:
   static LogicalResult verifyTrait(Operation *op) {
     return impl::verifySameOperandsEncoding(op,
-                                            /*allowTensorPointerType=*/true);
+                                            /*allowTensorPointerType=*/true,
+                                            /*ignoreSparseEncodings=*/true);
   }
 };
 
@@ -110,7 +113,7 @@ class SameLoadStoreOperandsAndResultEncoding
 public:
   static LogicalResult verifyTrait(Operation *op) {
     return impl::verifySameOperandsAndResultEncoding(
-        op, /*allowTensorPointerType=*/true);
+        op, /*allowTensorPointerType=*/true, /*ignoreSparseEncodings=*/true);
   }
 };
 

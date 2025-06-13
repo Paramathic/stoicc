@@ -25,7 +25,7 @@ def min_dot_size(target: GPUTarget):
         if lhs_bitwidth == 8:
             return (16, 16, 32)
         else:
-            return (16, 16, 16)
+            return (16, 16, 16 if not lhs_type.is_sparse() else 64)
 
     return check_dot_compatibility
 
@@ -208,6 +208,8 @@ class CUDABackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.common.add_inliner(pm)
+        passes.ttir.add_decompose_sparse_tensors(pm)
+        passes.common.add_canonicalizer(pm)
         passes.ttir.add_rewrite_tensor_pointer(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_combine(pm)

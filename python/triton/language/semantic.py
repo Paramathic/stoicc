@@ -757,14 +757,22 @@ def broadcast_impl_value(lhs: tl.tensor, rhs: tl.tensor, builder: ir.builder) ->
 
     # make_shape_compatible(block, scalar)
     if lhs_ty.is_block() and not rhs_ty.is_block():
-        rhs_ty = tl.block_type(rhs_ty.scalar, lhs_ty.shape)
+        if lhs_ty.is_sparse():
+            new_lhs_ty = tl.block_type(lhs_ty.scalar, lhs_ty.get_block_shapes()) # Grab dense version of sparse type
+            lhs = tl.tensor(builder.create_sparse_values(lhs.handle), new_lhs_ty)
+        rhs_ty = tl.block_type(rhs_ty.scalar, lhs_ty.get_block_shapes())
         rhs = tl.tensor(builder.create_splat(rhs.handle, lhs_ty.get_block_shapes()), rhs_ty)
     # make_shape_compatible(scalar, block)
     elif not lhs_ty.is_block() and rhs_ty.is_block():
-        lhs_ty = tl.block_type(lhs_ty.scalar, rhs_ty.shape)
+        if rhs_ty.is_sparse():
+            new_rhs_ty = tl.block_type(rhs_ty.scalar, rhs_ty.get_block_shapes())
+            rhs = tl.tensor(builder.create_sparse_values(rhs.handle), new_rhs_ty)
+        lhs_ty = tl.block_type(lhs_ty.scalar, rhs_ty.get_block_shapes())
         lhs = tl.tensor(builder.create_splat(lhs.handle, rhs_ty.get_block_shapes()), lhs_ty)
     # make_shape_compatible(block, block)
     elif lhs_ty.is_block() and rhs_ty.is_block():
+        assert not lhs_ty.is_sparse() and not rhs_ty.is_sparse(), ("Only scalar multiplication and addition is "
+                                                                   "allowed for sparse tensors")
         lhs_shape = lhs_ty.get_block_shapes()
         rhs_shape = rhs_ty.get_block_shapes()
 
@@ -1291,6 +1299,11 @@ def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builde
 
     # Cast to target data type
     val = cast(val, elt_ty, builder)
+
+    val_ty = val.type
+    if val_ty.is_sparse():
+        new_val_ty = tl.block_type(val_ty.scalar, val_ty.get_block_shapes()) # Grab dense version of sparse type
+        val = tl.tensor(builder.create_sparse_values(val.handle), new_val_ty)
 
     # Build IR
     return tl.tensor(builder.create_tensor_pointer_store(ptr.handle, val.handle, boundary_check, cache, eviction),
@@ -1914,7 +1927,8 @@ def make_block_ptr(base: tl.tensor, shape, strides, offsets, block_shape, order,
     #   `pointer_type<blocked<shape, element_type>>` in Python
     #   `tt.ptr<tensor<shape, element_type>>` in MLIR
     handle = builder.create_make_block_ptr(base.handle, shape, strides, offsets, block_shape, order)
-    return tl.tensor(handle, tl.pointer_type(tl.block_type(base.type.element_ty, block_shape)))
+    return tl.tensor(handle, tl.pointer_type(tl.block_type(base.type.element_ty, block_shape,
+                                                           sparsity_encoding=base.type.sparsity_encoding if base.type.is_sparse() else None)))
 
 
 def advance(base: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:

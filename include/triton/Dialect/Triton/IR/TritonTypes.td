@@ -57,14 +57,15 @@ def TT_PtrType : TritonTypeDef<"Pointer", "ptr"> {
         Pointer type in Triton IR type system, which could be pointing to scalars or tensors.
     }];
 
-    let parameters = (ins "Type":$pointeeType, "int":$addressSpace);
+    let parameters = (ins "Type":$pointeeType, "int":$addressSpace, "Attribute":$encoding);
 
     let builders = [
         TypeBuilderWithInferredContext<(ins
             "Type":$pointeeType,
-            "int":$addressSpace
+            "int":$addressSpace,
+            CArg<"Attribute", "{}">:$encoding
         ), [{
-            return $_get(pointeeType.getContext(), pointeeType, addressSpace);
+            return $_get(pointeeType.getContext(), pointeeType, addressSpace, encoding);
         }]>
     ];
 

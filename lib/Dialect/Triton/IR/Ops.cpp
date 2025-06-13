@@ -258,6 +258,18 @@ LogicalResult TransOp::inferReturnTypes(
   return success();
 }
 
+void DotOp::build(OpBuilder &builder, OperationState &state,
+                  Value a, Value b, Value c,
+                  triton::InputPrecision inputPrecision, uint32_t maxNumImpreciseAcc) {
+  DotOp::build(builder, state, a, b, c, {}, inputPrecision, maxNumImpreciseAcc);
+}
+void DotOp::build(OpBuilder &builder, OperationState &state,
+                  Type type,
+                  Value a, Value b, Value c,
+                  triton::InputPrecision inputPrecision, uint32_t maxNumImpreciseAcc) {
+  DotOp::build(builder, state, type, a, b, c, {}, inputPrecision, maxNumImpreciseAcc);
+}
+
 //-- DotOp --
 LogicalResult
 DotOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
@@ -272,6 +284,13 @@ DotOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
   auto aEnc = cast<RankedTensorType>(operands[0].getType()).getEncoding();
   auto bEnc = cast<RankedTensorType>(operands[1].getType()).getEncoding();
   auto retEnc = accTy.getEncoding();
+  if (aEnc && isa<SparseAttr>(aEnc)) {
+    assert(!bEnc);
+    return success();
+  } else if (bEnc && isa<SparseAttr>(bEnc)) {
+    assert(!aEnc);
+    return success();
+  }
   if (aEnc) {
     assert(bEnc && retEnc);
     Dialect &dialect = retEnc.getDialect();
@@ -296,8 +315,13 @@ LogicalResult DotOp::verify() {
   if (!aEncoding && !bEncoding)
     return success();
   // Verify that the encodings are valid.
-  if (!aEncoding || !bEncoding)
+  if (!aEncoding || !bEncoding) {
+    if ((aEncoding && isa<SparseAttr>(aEncoding)) ||
+        (bEncoding && isa<SparseAttr>(bEncoding)))
+      // It's fine if only one operand has an encoding if the encoding is sparse
+      return success();
     return emitError("mismatching encoding between A and B operands");
+  }
   auto accTy = getC().getType();
   auto retEnc = accTy.getEncoding();
   if (!retEnc)
@@ -312,7 +336,15 @@ bool DotOp::verifyDims() {
   auto aShape = this->getA().getType().getShape();
   auto bShape = this->getB().getType().getShape();
 
-  return aShape[aShape.size() - 1] == bShape[aShape.size() - 2];
+  auto aInnerDim = aShape[aShape.size() - 1];
+  auto bInnerDim = bShape[aShape.size() - 2];
+
+  if (isSparseDot(*this)) {
+    int sparseIndex = this->getSparseIndex();
+    if (sparseIndex == 0) aInnerDim *= 2;
+  }
+
+  return aInnerDim == bInnerDim;
 }
 
 //-- DotScaledOp --
@@ -934,10 +966,17 @@ void MakeTensorPtrOp::build(OpBuilder &builder, OperationState &state,
   auto pointerType = cast<PointerType>(base.getType());
   assert(pointerType != nullptr);
 
-  // Build type `tt.ptr<tensor<tensorShape, base.pointeeType>>`
-  auto tensorType = RankedTensorType::get(
-      SmallVector<int64_t>(tensorShape.begin(), tensorShape.end()),
-      pointerType.getPointeeType());
+  // Build type `tt.ptr<tensor<tensorShape, base.pointeeType [, encoding]>>`
+  RankedTensorType tensorType;
+  if (auto encoding = pointerType.getEncoding()) {
+    tensorType = RankedTensorType::get(
+        SmallVector<int64_t>(tensorShape.begin(), tensorShape.end()),
+        pointerType.getPointeeType(), encoding);
+  } else {
+    tensorType = RankedTensorType::get(
+        SmallVector<int64_t>(tensorShape.begin(), tensorShape.end()),
+        pointerType.getPointeeType());
+  }
   auto result = PointerType::get(tensorType, pointerType.getAddressSpace());
 
   return build(builder, state, result, base, shape, strides, offsets,
@@ -981,6 +1020,22 @@ void MakeTensorDescOp::build(OpBuilder &builder, OperationState &state,
   auto descTy =
       TensorDescType::get(builder.getContext(), blockTy, isSignedInteger);
   return build(builder, state, descTy, base, shape, strides);
+}
+
+//-- SparseValuesOp --
+void SparseValuesOp::build(OpBuilder &builder, OperationState &state,
+                           mlir::Value base) {
+  auto tensorType = cast<RankedTensorType>(base.getType());
+  assert(tensorType != nullptr);
+
+  // Build the values type of the tensor TODO (Arya) : need to have a class that recognizes an encoding as a sparse 2:4 encoding
+  // auto encoding = tensorType.getEncoding();
+  // TODO (Arya) : Change this to a utility function that checks sparsity type and creates type accordingly
+  auto tensorShape = tensorType.getShape();
+  SmallVector<int64_t> newShape {tensorShape[0], tensorShape[1]/2};
+  auto result = RankedTensorType::get(newShape, tensorType.getElementType());
+
+  build(builder, state, result, base);
 }
 
 // The following ops, including `call`, `func`, and `return` are copied and

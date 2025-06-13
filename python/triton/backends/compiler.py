@@ -80,4 +80,6 @@ class BaseBackend(metaclass=ABCMeta):
             return "D"
         if ty == "tensor" and arg.data_ptr() % 16 == 0 and kwargs.get("align", False):
             return "D"
+        if ty == "sparse_tensor" and (arg.data.data_ptr() % 16 == 0) and (arg.metadata.data_ptr() % 16 == 0) and kwargs.get("align", False):
+            return "D"
         return ""

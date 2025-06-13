@@ -823,13 +823,28 @@ nvgpu::rewriteAsPtxAsm(Operation *op, PatternRewriter &rewriter,
   outputsAndOperands.append(ptxOperands.begin(), ptxOperands.end());
   auto &ptxInstr = *ptxBuilder.create<PTXInstr>(ptxAsm);
   ptxInstr(outputsAndOperands, /*onlyAttachMLIRArgs=*/true);
-  auto retTy =
-      op->getNumResults() == 0 ? void_ty(ctx) : op->getResult(0).getType();
+
+  // TODO(Victor): Ensure always a struct
+  unsigned nElem = 0;
+  if (op->getNumResults() != 0) {
+    ArrayRef<Type> types =
+        cast<LLVM::LLVMStructType>(op->getResult(0).getType()).getBody();
+    nElem = types.size();
+  }
+  auto retTy = nElem == 0 ? void_ty(ctx) : (nElem == 1 ? int_ty(32) : op->getResult(0).getType());
+
   auto res = ptxBuilder.launch(rewriter, loc, retTy,
                                /*hasSideEffects*/ hasSideEffects);
   if (op->getNumResults() == 0) {
     rewriter.eraseOp(op);
   } else {
+    if (nElem == 1) {
+      auto b = TritonLLVMOpBuilder(loc, rewriter);
+      auto structTy = LLVM::LLVMStructType::getLiteral(
+          ctx, SmallVector<Type>(1, int_ty(32)));
+      Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structTy);
+      res = b.insert_val(structTy, llvmStruct, res, 0);
+    }
     rewriter.replaceOp(op, res);
   }
 

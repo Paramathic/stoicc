@@ -665,7 +665,7 @@ SmallVector<unsigned> DotOperandEncodingAttr::getCTASplitNum() const {
 
 LogicalResult DotOperandEncodingAttr::verify(
     ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
-    unsigned opIdx, Attribute parent, unsigned kWidth) {
+    unsigned opIdx, Attribute parent, unsigned kWidth, signed meta) {
   if (opIdx != 0 && opIdx != 1) {
     return emitError() << "ttg.dot_op opIdx parameter can be 0 or 1, got: "
                        << opIdx;
@@ -1871,7 +1871,7 @@ NvidiaMmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
 
 SmallVector<int64_t>
 NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
-                                        int kWidth, int opIdx) const {
+                                        int kWidth, int opIdx, signed meta) const {
   assert(
       kWidth >= 32 / bitwidth &&
       "kWidth must be >= 32 / bitwidth for this function to be well-defined");
@@ -1885,17 +1885,22 @@ NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
   if (rank == 3) {
     tileSize.push_back(1);
   }
-  if (opIdx == 0) {
-    // m x k
-    tileSize.push_back(16);
-    tileSize.push_back(4 * 64 / bitwidth);
+  if (meta > 0) {
+    tileSize.push_back(1);
+    tileSize.push_back(64);
   } else {
-    // k x n
-    // Hopper path never uses the n value, since this method is only invoked
-    // for in-RF (dotOpEnc) operands, but WGMMA only supports in A to be in RF
-    // so it's fine if the n is incorrect here
-    tileSize.push_back(4 * 64 / bitwidth);
-    tileSize.push_back(8);
+    if (opIdx == 0) {
+      // m x k
+      tileSize.push_back(16);
+      tileSize.push_back(4 * 64 / bitwidth);
+    } else {
+      // k x n
+      // Hopper path never uses the n value, since this method is only invoked
+      // for in-RF (dotOpEnc) operands, but WGMMA only supports in A to be in RF
+      // so it's fine if the n is incorrect here
+      tileSize.push_back(4 * 64 / bitwidth);
+      tileSize.push_back(8);
+    }
   }
 
   SmallVector<int64_t> numRep;

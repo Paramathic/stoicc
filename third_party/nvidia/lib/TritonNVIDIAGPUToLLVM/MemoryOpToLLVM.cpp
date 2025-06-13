@@ -58,6 +58,8 @@ public:
       // Limitation 3: Minimum tile size (8)x(8x16bits)
       canUseLdmatrix &=
           shape[kOrder] >= (8 * 16 / bitwidth) && shape[nonKOrder] >= 8;
+      // Allow loading of sparse metadata
+      canUseLdmatrix |= (dotEnc.getMeta() == 1);
       if (canUseLdmatrix) {
         return lowerSharedToDotOperand(op, adaptor, getTypeConverter(),
                                        rewriter);

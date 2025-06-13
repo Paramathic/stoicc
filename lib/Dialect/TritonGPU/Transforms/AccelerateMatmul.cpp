@@ -346,6 +346,7 @@ public:
 
     Value a = dotOp.getA();
     Value b = dotOp.getB();
+    Value e = nullptr;
     auto oldAType = cast<RankedTensorType>(a.getType());
     auto oldBType = cast<RankedTensorType>(b.getType());
     auto oldRetType = cast<RankedTensorType>(dotOp.getType());
@@ -370,12 +371,12 @@ public:
     auto newAcc =
         rewriter.create<ConvertLayoutOp>(oldAcc.getLoc(), newRetType, oldAcc);
 
-    auto getDotOperand = [&](Value v, int opIdx, int bitwidth) {
+    auto getDotOperand = [&](Value v, int opIdx, int bitwidth, signed meta) {
       auto minType =
           bitwidth > 0 ? rewriter.getIntegerType(bitwidth) : v.getType();
       auto vType = cast<RankedTensorType>(v.getType());
       auto newVEncoding = DotOperandEncodingAttr::get(
-          v.getContext(), opIdx, newRetType.getEncoding(), minType);
+          v.getContext(), opIdx, newRetType.getEncoding(), minType, meta);
       auto newVType = RankedTensorType::get(
           vType.getShape(), vType.getElementType(), newVEncoding);
       return rewriter.create<ConvertLayoutOp>(v.getLoc(), newVType, v);
@@ -388,7 +389,8 @@ public:
       bool allowTranspose = eltType.isF16() || eltType.isBF16();
       if (!aFromLoad) {
         int bitwidth = getElementTypeOrSelf(a).getIntOrFloatBitWidth();
-        a = getDotOperand(a, 0, bitwidth);
+        signed meta = dotOp.getSparseIndex() == 0 ? 0 : -1;
+        a = getDotOperand(a, 0, bitwidth, meta);
       } else {
         a = getSharedMemoryMMAOperand(a, rewriter, 0, allowTranspose);
       }
@@ -401,11 +403,19 @@ public:
       int minBitwidth =
           std::min(computeOrigBitWidth(a), computeOrigBitWidth(b));
 
-      a = getDotOperand(a, 0, minBitwidth);
-      b = getDotOperand(b, 1, minBitwidth);
+      a = getDotOperand(a, 0, minBitwidth, dotOp.getSparseIndex() == 0 ? 0 : -1);
+      b = getDotOperand(b, 1, minBitwidth, dotOp.getSparseIndex() == 1 ? 0 : -1);
+      if (isSparseDot(dotOp)) {
+        e = dotOp.getE();
+        auto oldEType = dotOp.getE().getType();
+        auto sparseIndex = dotOp.getSparseIndex();
+        // TODO : (Arya) Change the logic for non-2:4 sparsity
+        e = getDotOperand(e, dotOp.getSparseIndex(), minBitwidth, 1);
+      }
       newDot = rewriter.create<DotOp>(dotOp.getLoc(), newRetType, a, b, newAcc,
-                                      dotOp.getInputPrecision(),
-                                      dotOp.getMaxNumImpreciseAcc());
+                                      e, dotOp.getInputPrecision(),
+                                      dotOp.getMaxNumImpreciseAcc(),
+                                      dotOp.getSparseIndex());
     }
     // convert dot instruction
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(origDotOp, origDotOp.getType(),

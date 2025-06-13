@@ -37,6 +37,17 @@ def TritonReorderBroadcast : Pass</*cli-arg*/"triton-reorder-broadcast", /*Op*/"
   let dependentDialects = ["mlir::triton::TritonDialect"];
 }
 
+def TritonDecomposeSparseTensors : Pass<"triton-decompose-sparse-tensors", "mlir::ModuleOp"> {
+    let summary = "Decompose sparse tensors to their dense components";
+    let description = [{
+        This pass removes all sparsity and decomposes sparse tensors to their dense components.
+    }];
+
+    let constructor = "mlir::triton::createDecomposeSparseTensorsPass()";
+
+    let dependentDialects = ["mlir::triton::TritonDialect"];
+}
+
 def TritonRewriteTensorPointer : Pass</*cli-arg*/"triton-rewrite-tensor-pointer", /*Op*/"mlir::ModuleOp"> {
   let summary = "Rewrite load/stores with tensor pointers into legacy load/stores";
   let description = [{

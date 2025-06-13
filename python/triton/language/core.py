@@ -7,6 +7,7 @@ from functools import partial, wraps
 import typing
 from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple
 import builtins
+from triton.sparsity.compressed_sparse import CompressedSparse
 from .. import knobs
 from ..runtime.jit import jit
 import inspect
@@ -532,6 +533,10 @@ class dtype(base_type):
         return False
 
     @staticmethod
+    def is_sparse():
+        return False
+
+    @staticmethod
     def is_const():
         return False
 
@@ -633,17 +638,20 @@ _DtypeClass = dtype
 
 class pointer_type(dtype):
 
-    def __init__(self, element_ty: dtype, address_space: int = 1, const: bool = False):
+    def __init__(self, element_ty: dtype, address_space: int = 1, const: bool = False, sparsity_encoding: str = None):
         element_ty = _unwrap_if_constexpr(element_ty)
         if not isinstance(element_ty, dtype):
             raise TypeError(f'element_ty has type `{type(element_ty).__name__}`; expected `dtype`.')
         self.element_ty = element_ty
         self.address_space = address_space
         self.const = const
-        self.name = f'pointer<{element_ty}>' if not const else f'const_pointer<{element_ty}>'
+        self.sparsity_encoding = sparsity_encoding
+        self.name = (f'pointer<{element_ty}>' if not const else f'const_pointer<{element_ty}>') if sparsity_encoding is None \
+            else f'pointer<{element_ty}, #spare_encoding={sparsity_encoding}>'
 
     def to_ir(self, builder: ir.builder) -> ir.pointer_type:
-        return builder.get_ptr_ty(self.element_ty.to_ir(builder), self.address_space)
+        return builder.get_ptr_ty(self.element_ty.to_ir(builder), self.address_space,
+                                  self.sparsity_encoding if self.is_sparse() else "")
 
     def __str__(self):
         return self.name
@@ -656,6 +664,9 @@ class pointer_type(dtype):
 
     def is_const(self):
         return self.const
+
+    def is_sparse(self):
+        return self.sparsity_encoding is not None
 
     def __eq__(self, other: pointer_type) -> bool:
         if not isinstance(other, pointer_type):
@@ -672,8 +683,9 @@ class pointer_type(dtype):
 
 class block_type(dtype):
 
-    def __init__(self, element_ty: dtype, shape: List):
+    def __init__(self, element_ty: dtype, shape: List, sparsity_encoding=None):
         self.element_ty = element_ty
+        self.sparsity_encoding = sparsity_encoding
 
         # Note that block_type's shape is a list of int
         # while tensor's shape is a list of constexpr.
@@ -685,7 +697,8 @@ class block_type(dtype):
             raise TypeError('0d block_type is forbidden')
 
         self.numel = validate_block_shape(self.shape)
-        self.name = f'<{self.shape}, {self.element_ty}>'
+        self.name = f'<{self.shape}, {self.element_ty}>' if sparsity_encoding is None else \
+            f'<{self.shape}, {self.element_ty}, #sparsity_encoding={self.sparsity_encoding}>'
 
     def to_ir(self, builder: ir.builder) -> ir.block_type:
         return builder.get_block_ty(self.element_ty.to_ir(builder), self.shape)
@@ -702,10 +715,25 @@ class block_type(dtype):
     def get_block_shapes(self) -> Tuple[int]:
         return self.shape
 
+    def is_sparse(self):
+        return self.sparsity_encoding is not None
+
+    def get_block_shapes(self) -> List[int]:
+        if not self.is_sparse():
+            return self.shape
+        supported_sparsities = CompressedSparse.get_supported_sparsities()
+        assert self.sparsity_encoding in supported_sparsities, (f"{self.sparsity_encoding} is not supported."
+                                                                f"Supported sparsity types include {supported_sparsities}")
+
+        # TODO (Arya) : possibly change this to a global hash table in case of reuse
+        match self.sparsity_encoding:
+            case "NV24":
+                return [self.shape[0], self.shape[1]//2]
+
     def __eq__(self, other) -> bool:
         if not isinstance(other, block_type):
             return False
-        return self.element_ty == other.element_ty and self.shape == other.shape
+        return self.element_ty == other.element_ty and self.get_block_shapes() == other.get_block_shapes()
 
     @property
     def scalar(self):
@@ -716,6 +744,23 @@ class block_type(dtype):
         shape = '_'.join(map(str, self.shape))
         return f'{elt}S{shape}S'
 
+class sparse_type(dtype):
+    def __init__(self, element_ty, shape, sparsity_encoding):
+        self.element_ty = element_ty
+        self.shape = shape
+        self.sparsity_encoding = sparsity_encoding
+
+    def __str__(self):
+        return f'sparse_tensor<{str(self.shape).strip("[]").replace(", ", "x")}x{self.element_ty}, #format={self.sparsity_encoding}>'
+
+    def __repr__(self):
+        return f'sparse_tensor<{str(self.shape).strip("[]").replace(", ", "x")}x{self.element_ty}, #format={self.sparsity_encoding}>'
+
+    def to_ir(self, builder: ir.builder) -> ir.type:
+        return builder.get_sparse_tensor_ty(self.element_ty.to_ir(builder), self.shape)
+
+    def is_sparse(self):
+        return True
 
 class tuple_type(base_type):
 
