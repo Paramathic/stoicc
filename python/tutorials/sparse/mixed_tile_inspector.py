@@ -27,14 +27,26 @@ class MMAShape:
     num_stages : int
     group_size : int
 
+    sparseA : bool = True
+
     def __post_init__(self):
-        self.tiles_row = self.M // self.m
-        self.tiles_col = self.K // self.k
+        if self.sparseA:
+            self.tiles_row = self.M // self.m
+            self.tiles_col = self.K // self.k
+        else:
+            self.tiles_row = self.N // self.n
+            self.tiles_col = self.K // self.k
 
 class Sparsity(Enum):
     NV_24 = 0 # 2:4 sparse tile
     DENSE = 1 # Fully dense tile
     EMPTY = 2 # All-zero tile
+
+def pT(x):
+    '''
+    Transpose and return X, make it contiguous
+    '''
+    return x.transpose(0, 1).contiguous()
 
 def generate_sparsity_pattern(shape, n_sparse, n_empty, is_global):
     """
@@ -91,7 +103,7 @@ def create_mixed_sparsity(A, sparsity_map):
     # Given a matrix and a sparsity map, performs reordering and scheduling.
 
     rows, cols = len(sparsity_map), len(sparsity_map[0])
-    m, k = A.shape[0] // rows, A.shape[1] // cols
+    d0, d1 = A.shape[0] // rows, A.shape[1] // cols
 
     # Calculate the switches needed to bring the 2:4 elements before the dense elements for every row
     mapping = np.argsort(sparsity_map, kind='stable')
@@ -103,13 +115,13 @@ def create_mixed_sparsity(A, sparsity_map):
 
     def store(T, ti, tj, F, fi, fj, prune = None):
         if prune is None or prune == Sparsity.DENSE.value:
-            T[m * ti : m * (ti + 1), k * tj : k * (tj + 1)] = \
-                F[m * fi : m * (fi + 1), k * fj : k * (fj + 1)]
+            T[d0 * ti : d0 * (ti + 1), d1 * tj : d1 * (tj + 1)] = \
+                F[d0 * fi : d0 * (fi + 1), d1 * fj : d1 * (fj + 1)]
         elif prune == Sparsity.NV_24.value:
-            T[m * ti : m * (ti + 1), k * tj : k * (tj + 1)] = \
-                prune_2_4(F[m * fi : m * (fi + 1), k * fj : k * (fj + 1)])
+            T[d0 * ti : d0 * (ti + 1), d1 * tj : d1 * (tj + 1)] = \
+                prune_2_4(F[d0 * fi : d0 * (fi + 1), d1 * fj : d1 * (fj + 1)])
         elif prune == Sparsity.EMPTY.value:
-            T[m * ti : m * (ti + 1), k * tj : k * (tj + 1)] = 0
+            T[d0 * ti : d0 * (ti + 1), d1 * tj : d1 * (tj + 1)] = 0
         else:
             raise Exception("Unknown pruning method.")
 
@@ -120,8 +132,8 @@ def create_mixed_sparsity(A, sparsity_map):
     # Decompose into sparse and dense buffers
     total_sparse = np.sum(row_counts)
     total_dense = np.sum(row_counts_dense)
-    s = torch.zeros((m, k * total_sparse))
-    d = torch.zeros((m, k * total_dense))
+    s = torch.zeros((d0, d1 * total_sparse))
+    d = torch.zeros((d0, d1 * total_dense))
     si, di = 0, 0
     for i in range(rows):
         n_sparse = row_counts[i]
@@ -139,28 +151,55 @@ def create_mixed_sparsity(A, sparsity_map):
 def inspect_tiled(shape, sparse, empty, keep = False):
     # Perform the inspection phase.
 
-    y = torch.randn(shape.K, shape.N)
+    if shape.sparseA:
+        y = torch.randn(shape.K, shape.N)
 
-    pat = generate_sparsity_pattern(shape, sparse, empty, is_global=True)
-    x, x_sparse, x_dense, row_diffs, sparse_row_offsets, dense_row_offsets = \
-        create_mixed_sparsity(torch.randn(shape.M, shape.K), pat)
+        pat = generate_sparsity_pattern(shape, sparse, empty, is_global=True)
+        x, x_sparse, x_dense, row_diffs, sparse_row_offsets, dense_row_offsets = \
+            create_mixed_sparsity(torch.randn(shape.M, shape.K), pat)
 
-    x_sparse = x_sparse.pin_memory().to(device="cuda:0", dtype=torch.float16, copy=True, non_blocking=False)
-    x_dense = x_dense.pin_memory().to(device="cuda:0", dtype=torch.float16, copy=True, non_blocking=False)
-    x_compressed = CompressedSparse.NV24(*compress_dense_to_sparse(x_sparse))
+        x_sparse = x_sparse.pin_memory().to(device="cuda:0", dtype=torch.float16, copy=True, non_blocking=False)
+        x_dense = x_dense.pin_memory().to(device="cuda:0", dtype=torch.float16, copy=True, non_blocking=False)
+        x_compressed = CompressedSparse.NV24(*compress_dense_to_sparse(x_sparse))
 
-    if keep:
+        if keep:
+            x = x.pin_memory().to(device="cuda:0", dtype=torch.float16, copy=True, non_blocking=False)
+
+        y = y.pin_memory().to(device="cuda:0", dtype=torch.float16, copy=True, non_blocking=False)
+
+        row_diffs = torch.Tensor(row_diffs).contiguous().to(device="cuda:0", dtype=torch.int32, copy=True, non_blocking=False)
+        sparse_row_offsets = torch.Tensor(sparse_row_offsets).contiguous().to(device="cuda:0", dtype=torch.int32, copy=True, non_blocking=False)
+        dense_row_offsets = torch.Tensor(dense_row_offsets).contiguous().to(device="cuda:0", dtype=torch.int32, copy=True, non_blocking=False)
+
+        torch.cuda.synchronize()
+
+        if keep:
+            return (x, y), (x_compressed, x_dense, y, row_diffs, sparse_row_offsets, dense_row_offsets)
+        else:
+            return x_compressed, x_dense, y, row_diffs, sparse_row_offsets, dense_row_offsets
+    else:
+        x = torch.randn(shape.M, shape.K)
+
+        pat = generate_sparsity_pattern(shape, sparse, empty, is_global=True)
+        y, y_sparse, y_dense, row_diffs, sparse_row_offsets, dense_row_offsets = \
+                create_mixed_sparsity(torch.randn(shape.N, shape.K), pat)
+
+        y_sparse = y_sparse.pin_memory().to(device="cuda:0", dtype=torch.float16, copy=True, non_blocking=False)
+        y_dense = y_dense.pin_memory().to(device="cuda:0", dtype=torch.float16, copy=True, non_blocking=False)
+        y_compressed = CompressedSparse.NV24(*compress_dense_to_sparse(y_sparse))
+
+        if keep:
+            y = y.pin_memory().to(device="cuda:0", dtype=torch.float16, copy=True, non_blocking=False)
+
         x = x.pin_memory().to(device="cuda:0", dtype=torch.float16, copy=True, non_blocking=False)
 
-    y = y.pin_memory().to(device="cuda:0", dtype=torch.float16, copy=True, non_blocking=False)
+        row_diffs = torch.Tensor(row_diffs).to(device="cuda:0", dtype=torch.int32, copy=True, non_blocking=False)
+        sparse_row_offsets = torch.Tensor(sparse_row_offsets).contiguous().to(device="cuda:0", dtype=torch.int32, copy=True, non_blocking=False)
+        dense_row_offsets = torch.Tensor(dense_row_offsets).contiguous().to(device="cuda:0", dtype=torch.int32, copy=True, non_blocking=False)
 
-    row_diffs = torch.Tensor(row_diffs).contiguous().to(device="cuda:0", dtype=torch.int32, copy=True, non_blocking=False)
-    sparse_row_offsets = torch.Tensor(sparse_row_offsets).contiguous().to(device="cuda:0", dtype=torch.int32, copy=True, non_blocking=False)
-    dense_row_offsets = torch.Tensor(dense_row_offsets).contiguous().to(device="cuda:0", dtype=torch.int32, copy=True, non_blocking=False)
+        torch.cuda.synchronize()
 
-    torch.cuda.synchronize()
-
-    if keep:
-        return (x, y), (x_compressed, x_dense, y, row_diffs, sparse_row_offsets, dense_row_offsets)
-    else:
-        return x_compressed, x_dense, y, row_diffs, sparse_row_offsets, dense_row_offsets
+        if keep:
+            return (x, pT(y)), (x, y_compressed, y_dense, row_diffs, sparse_row_offsets, dense_row_offsets)
+        else:
+            return x, y_compressed, y_dense, row_diffs, sparse_row_offsets, dense_row_offsets

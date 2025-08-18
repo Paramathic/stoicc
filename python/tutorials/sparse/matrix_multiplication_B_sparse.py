@@ -23,21 +23,21 @@ def is_cuda():
 def get_cuda_autotune_config():
     return [
         # Small batch sizes
-         triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3,
+         triton.Config({'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3,
                      num_warps=8),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4,
+        triton.Config({'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4,
                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4,
+        triton.Config({'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4,
                       num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4,
+        triton.Config({'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4,
                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4,
+        triton.Config({'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4,
                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4,
+        triton.Config({'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=4,
                      num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=5,
+        triton.Config({'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=5,
                      num_warps=2),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=5,
+        triton.Config({'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=5,
                      num_warps=2)
     ]
 
@@ -95,7 +95,7 @@ def matmul_kernel(
 
     a_ptrs = tl.make_block_ptr(a_ptr,
                                shape=(M, K),
-                               strides=(stride_am, stride_ak),
+                               strides=(stride_ak, stride_am),
                                offsets=(0, pid_m*BLOCK_SIZE_M),
                                block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_M),
                                order=(1,0))
@@ -108,9 +108,12 @@ def matmul_kernel(
 
     accumulator = tl.zeros((BLOCK_SIZE_N, BLOCK_SIZE_M), dtype=tl.float32)
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
-        a = tl.load(a_ptrs, boundary_check=[1], padding_option="zero")
-        b = tl.load(b_ptrs, boundary_check=[1], padding_option="zero")
+        a = tl.load(a_ptrs)
+        b = tl.load(b_ptrs)
         
+        # You can think of the 'b' and 'a' below as the transposition of the
+        # original 'a' and 'b' so that the transpose of the dot is the
+        # correct answer
         accumulator = tl.dot(b, a, accumulator)
 
         a_ptrs = tl.advance(a_ptrs, [BLOCK_SIZE_K, 0])
@@ -126,7 +129,8 @@ def matmul_kernel(
                                offsets=(pid_m*BLOCK_SIZE_M, pid_n*BLOCK_SIZE_N),
                                block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_N),
                                order=(1,0))
-    tl.store(c_ptrs, c.trans(), boundary_check=(1,0))
+    # tl.store(c_ptrs, c.trans(), boundary_check=(1,0))
+    tl.store(c_ptrs, c.trans())
 
 
 def matmul(a, b):
@@ -134,7 +138,7 @@ def matmul(a, b):
     assert a.is_contiguous(), "Matrix A must be contiguous"
 
     M, K = a.shape
-    K, N = b.shape
+    N, K = b.shape
     # Allocates output.
     c = torch.empty((M, N), device=a.device, dtype=torch.float16)
 
@@ -142,7 +146,7 @@ def matmul(a, b):
     matmul_kernel[grid](
         a, b, c,
         M, N, K,
-        a.stride(1), a.stride(0),
+        a.stride(0), a.stride(1),
         b.stride(0), b.stride(1),
         c.stride(0), c.stride(1),
     )
@@ -152,8 +156,8 @@ def pT(x) : return x.transpose(0, 1).contiguous()
 
 def check_correctness():
     torch.manual_seed(0)
-    a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-    b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
+    a = torch.randn((512, 1024), device='cuda', dtype=torch.float16) # M x K
+    b = torch.randn((1024, 512), device='cuda', dtype=torch.float16) # K x N
 
     b_pruned = prune_2_4(pT(b))
 
@@ -171,6 +175,7 @@ def check_correctness():
         print("✅ Triton and Torch match")
     else:
         print("❌ Triton and Torch differ")
+        exit()
 
 
 def main(args):
