@@ -93,11 +93,17 @@ def matmul_kernel(
     pid_m = first_pid_m + (pid % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
 
+    # a_ptrs = tl.make_block_ptr(a_ptr,
+    #                            shape=(M, K),
+    #                            strides=(stride_ak, stride_am),
+    #                            offsets=(0, pid_m*BLOCK_SIZE_M),
+    #                            block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_M),
+    #                            order=(1,0))
     a_ptrs = tl.make_block_ptr(a_ptr,
                                shape=(M, K),
-                               strides=(stride_ak, stride_am),
-                               offsets=(0, pid_m*BLOCK_SIZE_M),
-                               block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_M),
+                               strides=(stride_am, stride_ak),
+                               offsets=(pid_m*BLOCK_SIZE_M, 0),
+                               block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K),
                                order=(1,0))
     b_ptrs = tl.make_block_ptr(b_ptr,
                                shape=(N, K),
@@ -108,7 +114,7 @@ def matmul_kernel(
 
     accumulator = tl.zeros((BLOCK_SIZE_N, BLOCK_SIZE_M), dtype=tl.float32)
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
-        a = tl.load(a_ptrs)
+        a = tl.load(a_ptrs).trans()
         b = tl.load(b_ptrs)
         
         # You can think of the 'b' and 'a' below as the transposition of the
@@ -116,7 +122,7 @@ def matmul_kernel(
         # correct answer
         accumulator = tl.dot(b, a, accumulator)
 
-        a_ptrs = tl.advance(a_ptrs, [BLOCK_SIZE_K, 0])
+        a_ptrs = tl.advance(a_ptrs, [0, BLOCK_SIZE_K])
         b_ptrs = tl.advance(b_ptrs, [0, BLOCK_SIZE_K])
 
     c = accumulator.to(tl.float16)

@@ -11,9 +11,9 @@ from mixed_tile_inspector import * # Import inspector code
 
 # Parameters
 # Optimal tile sizes/other parameters should be selected by autotuning a 2:4/dense kernel of the same size.
-SHAPE = MMAShape(32, 4096, 2048, # Matrix dimensions M, N, K
+SHAPE = MMAShape(16, 4096, 4096, # Matrix dimensions M, N, K
                  16, 128, 64,     # Tile size along each matrix dimension
-                 num_warps = 4, num_stages = 3, group_size = 8, sparseA=False)
+                 num_warps = 8, num_stages = 3, group_size = 8, sparseA=False)
 
 def get_autotune_config():
     return [
@@ -132,12 +132,11 @@ def tiled_kernel(
 ):
     """
     Kernel for computing a tiled matmul with 2:4 sparse, dense, and all-zero tiles.
-    - A is tiled, and each tile has an assigned sparsity type. B is dense.
+    - B is tiled, and each tile has an assigned sparsity type. A is dense.
     - Tiles of A stored in a csr-like format.
-        - Sparse tiles stored in `a_sparse_ptr`
-        - Dense tiles stored in `a_dense_ptr`
-        - `a_sparse_row`, `a_dense_row`, and `a_col` contain row pointers and column indices
-    - Currently, all rows need at least one sparse tile
+        - Sparse tiles stored in `b_sparse_ptr`
+        - Dense tiles stored in `b_dense_ptr`
+        - `b_sparse_row`, `b_dense_row`, and `b_row` contain row pointers and column indices
     """
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
@@ -162,8 +161,8 @@ def tiled_kernel(
     b_row += 1
 
     a_ptrs = tl.make_block_ptr(a_ptr,
-                               shape=(M,K), strides=(stride_ak, stride_am), offsets=(first_a*BLOCK_SIZE_K, pid_row*BLOCK_SIZE_M),
-                               block_shape=(BLOCK_SIZE_K, BLOCK_SIZE_M), order=(1,0))
+                               shape=(M,K), strides=(stride_am, stride_ak), offsets=(pid_row*BLOCK_SIZE_M, first_a*BLOCK_SIZE_K),
+                               block_shape=(BLOCK_SIZE_M, BLOCK_SIZE_K), order=(1,0))
     b_sparse_ptrs = tl.make_block_ptr(b_sparse_ptr,
                                       shape=(BLOCK_SIZE_N,SK), strides=(stride_bsn,stride_bsk), offsets=(0, sparse_l*BLOCK_SIZE_K),
                                       block_shape=(BLOCK_SIZE_N, BLOCK_SIZE_K), order=(1,0))
@@ -177,11 +176,11 @@ def tiled_kernel(
     for k in range(sparse_r - sparse_l):
         accumulator = tl.dot(
             tl.load(b_sparse_ptrs),
-            tl.load(a_ptrs),
+            tl.load(a_ptrs).trans(),
             accumulator
         )
 
-        a_ptrs = tl.advance(a_ptrs, [tl.load(b_row) * BLOCK_SIZE_K, 0])
+        a_ptrs = tl.advance(a_ptrs, [0, tl.load(b_row) * BLOCK_SIZE_K])
         b_sparse_ptrs = tl.advance(b_sparse_ptrs, [0, BLOCK_SIZE_K])
         b_row += 1
 
@@ -189,11 +188,11 @@ def tiled_kernel(
     for k in range(dense_r - dense_l):
         accumulator = tl.dot(
             tl.load(b_dense_ptrs),
-            tl.load(a_ptrs),
+            tl.load(a_ptrs).trans(),
             accumulator
         )
 
-        a_ptrs = tl.advance(a_ptrs, [tl.load(b_row) * BLOCK_SIZE_K, 0])
+        a_ptrs = tl.advance(a_ptrs, [0, tl.load(b_row) * BLOCK_SIZE_K])
         b_dense_ptrs = tl.advance(b_dense_ptrs, [0, BLOCK_SIZE_K])
         b_row += 1
 
