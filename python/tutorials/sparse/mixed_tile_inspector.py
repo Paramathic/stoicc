@@ -99,15 +99,22 @@ def generate_sparsity_pattern(shape, n_sparse, n_empty, is_global):
 
     return pattern
 
-def create_mixed_sparsity(A, sparsity_map):
+def create_mixed_sparsity(A, sparsity_map, separate_B_order=False):
     # Given a matrix and a sparsity map, performs reordering and scheduling.
 
     rows, cols = len(sparsity_map), len(sparsity_map[0])
     d0, d1 = A.shape[0] // rows, A.shape[1] // cols
 
-    # Calculate the switches needed to bring the 2:4 elements before the dense elements for every row
     mapping = np.argsort(sparsity_map, kind='stable')
-    row_diffs = np.diff(mapping, prepend=0)
+    # Calculate the switches needed to bring the 2:4 elements before the dense elements for every row
+    if not separate_B_order:
+        row_diffs = np.diff(mapping, prepend=0)
+    else:
+        mapping = np.argsort(sparsity_map, kind='stable')
+        # dense_mapping = sparsity_map[::-1]
+        dense_mapping = np.argsort(-sparsity_map, kind='stable')
+        sparse_row_diffs = np.diff(mapping, prepend=0)
+        dense_row_diffs = np.diff(dense_mapping, prepend=0)
     row_counts = np.apply_along_axis(lambda x: (x == Sparsity.NV_24.value).sum(), 1, sparsity_map)
     row_counts_dense = np.apply_along_axis(lambda x: (x == Sparsity.DENSE.value).sum(), 1, sparsity_map)
     sparse_row_offsets = np.concatenate(([0],  np.cumsum(row_counts)))
@@ -146,17 +153,24 @@ def create_mixed_sparsity(A, sparsity_map):
                 store(d, 0, di, A, i, mapping[i][j])
                 di += 1
 
-    return A, s, d, row_diffs, sparse_row_offsets, dense_row_offsets
+    if not separate_B_order:
+        return A, s, d, row_diffs, sparse_row_offsets, dense_row_offsets
+    else:
+        return A, s, d, sparse_row_diffs, dense_row_diffs, sparse_row_offsets, dense_row_offsets
 
-def inspect_tiled(shape, sparse, empty, keep = False):
+def inspect_tiled(shape, sparse, empty, keep = False, separate_col_order=False):
     # Perform the inspection phase.
 
     if shape.sparseA:
         y = torch.randn(shape.K, shape.N)
 
         pat = generate_sparsity_pattern(shape, sparse, empty, is_global=True)
-        x, x_sparse, x_dense, row_diffs, sparse_row_offsets, dense_row_offsets = \
-            create_mixed_sparsity(torch.randn(shape.M, shape.K), pat)
+        if not separate_col_order:
+            x, x_sparse, x_dense, row_diffs, sparse_row_offsets, dense_row_offsets = \
+                create_mixed_sparsity(torch.randn(shape.M, shape.K), pat)
+        else:
+            x, x_sparse, x_dense, sparse_row_diffs, dense_row_diffs, sparse_row_offsets, dense_row_offsets = \
+                create_mixed_sparsity(torch.randn(shape.M, shape.K), pat, separate_B_order=True)
 
         x_sparse = x_sparse.pin_memory().to(device="cuda:0", dtype=torch.float16, copy=True, non_blocking=False)
         x_dense = x_dense.pin_memory().to(device="cuda:0", dtype=torch.float16, copy=True, non_blocking=False)
@@ -167,17 +181,26 @@ def inspect_tiled(shape, sparse, empty, keep = False):
 
         y = y.pin_memory().to(device="cuda:0", dtype=torch.float16, copy=True, non_blocking=False)
 
-        row_diffs = torch.Tensor(row_diffs).contiguous().to(device="cuda:0", dtype=torch.int32, copy=True, non_blocking=False)
+        if not separate_col_order:
+            row_diffs = torch.Tensor(row_diffs).contiguous().to(device="cuda:0", dtype=torch.int32, copy=True, non_blocking=False)
+        else:
+            sparse_row_diffs = torch.Tensor(sparse_row_diffs).contiguous().to(device="cuda:0", dtype=torch.int32, copy=True, non_blocking=False)
+            dense_row_diffs = torch.Tensor(dense_row_diffs).contiguous().to(device="cuda:0", dtype=torch.int32, copy=True, non_blocking=False)
         sparse_row_offsets = torch.Tensor(sparse_row_offsets).contiguous().to(device="cuda:0", dtype=torch.int32, copy=True, non_blocking=False)
         dense_row_offsets = torch.Tensor(dense_row_offsets).contiguous().to(device="cuda:0", dtype=torch.int32, copy=True, non_blocking=False)
 
         torch.cuda.synchronize()
 
-        if keep:
-            return (x, y), (x_compressed, x_dense, y, row_diffs, sparse_row_offsets, dense_row_offsets)
+        if not separate_col_order:
+            sparse_args = x_compressed, x_dense, y, row_diffs, sparse_row_offsets, dense_row_offsets
         else:
-            return x_compressed, x_dense, y, row_diffs, sparse_row_offsets, dense_row_offsets
+            sparse_args = x_compressed, x_dense, y, sparse_row_diffs, dense_row_diffs, sparse_row_offsets, dense_row_offsets
+
+        if keep:
+            return (x, y), sparse_args
+        return sparse_args
     else:
+        assert not separate_col_order
         x = torch.randn(shape.M, shape.K)
 
         pat = generate_sparsity_pattern(shape, sparse, empty, is_global=True)

@@ -121,6 +121,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
     for _ in range(5):
         cache.zero_()
         fn()
+    di.synchronize()
     end_event.record()
     di.synchronize()
     estimate_ms = start_event.elapsed_time(end_event) / 5
@@ -146,6 +147,7 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, fast_flu
         # record time of `fn`
         start_event[i].record()
         fn()
+        di.synchronize()
         end_event[i].record()
     # Record clocks
     di.synchronize()
